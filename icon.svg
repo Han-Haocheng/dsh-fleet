@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Profiles fleet">
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#3d5a99"/>
+  <rect x="14" y="34" width="36" height="7" rx="3.5" fill="#e8eefc" opacity="0.95"/>
+  <rect x="14" y="45" width="24" height="7" rx="3.5" fill="#c9d6f2" opacity="0.9"/>
+  <circle cx="44" cy="21" r="10" fill="#f2b64c"/>
+  <path d="M40 21.5v-2.2a4 4 0 0 1 8 0v2.2" fill="none" stroke="#3d5a99" stroke-width="2.2" stroke-linecap="round"/>
+  <rect x="38.4" y="21" width="11.2" height="8.6" rx="2.4" fill="#3d5a99"/>
+  <circle cx="44" cy="25" r="1.5" fill="#f2b64c"/>
+</svg>

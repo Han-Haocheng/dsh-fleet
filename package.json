@@ -1,0 +1,54 @@
+{
+  "name": "dsh-fleet",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "Unified profile manager for DeepSeek Harness: install plugins, model providers and config rows per profile from one manifest, with per-entry scope locking.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Han-Haocheng/dsh-fleet.git"
+  },
+  "homepage": "https://github.com/Han-Haocheng/dsh-fleet#readme",
+  "author": "Han Haocheng",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "profiles",
+    "plugin-manager",
+    "configuration"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./lib/*": "./lib/*",
+    "./scripts/*": "./scripts/*",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib/**",
+    "scripts/**",
+    "locale/*.json",
+    "icon.svg",
+    "CHANGELOG.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "dependencies": {
+    "yaml": "^2.5.0"
+  }
+}

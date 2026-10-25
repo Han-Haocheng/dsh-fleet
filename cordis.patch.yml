@@ -1,0 +1,10 @@
+# dsh-fleet bundle patch: one Host row. The Host half owns the manifest
+# (~/.dsh/fleet.yml), the per-profile renderer, the loopback-only
+# /api/fleet/* routes, and the `fleet` agent tool. The browser half
+# (declared by package.json dsh.client) adds the Profiles settings page.
+- insert:
+    - id: dsh-fleet
+      name: dsh-fleet
+      config:
+        manifestPath: fleet.yml
+

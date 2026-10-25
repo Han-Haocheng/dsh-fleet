@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "多 Profile 管理",
+    "description": "用一份带适用范围锁的清单，统一管理 web、TUI、Desktop 的插件、模型接入与配置行。"
+  }
+}

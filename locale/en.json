@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Profiles (Fleet)",
+    "description": "Manage plugins, model providers and config rows across web, TUI and Desktop profiles from one scoped manifest."
+  }
+}
