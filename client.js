@@ -538,7 +538,7 @@ window.__ModuleLoader__.load({
           ),
         )
 
-        const ENTRY_COL_WIDTH = 320
+        const ENTRY_COL_WIDTH = 210
         const ACTIONS_COL_WIDTH = 88
 
         const headCell = {
@@ -668,7 +668,7 @@ window.__ModuleLoader__.load({
                     style: {
                       borderCollapse: 'collapse',
                       width: '100%',
-                      minWidth: 620,
+                      minWidth: 500,
                       tableLayout: 'fixed',
                       fontSize: 13,
                     },
