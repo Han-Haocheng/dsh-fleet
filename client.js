@@ -43,6 +43,21 @@ window.__ModuleLoader__.load({
         notInScope: '不在范围',
         scopeCellHint: '每列勾选框即该条目是否写入该 profile；改完点行尾「保存」。',
         emptyScope: '至少要保留一个 profile；要彻底停用请从清单删除该条目。',
+        identifierLabel: '标识',
+        specLabel: '安装 spec',
+        providesLabel: '提供',
+        pruneLabel: '卸载时清理依赖',
+        apiLabel: 'API',
+        baseUrlLabel: 'Base URL',
+        modelsLabel: '模型数',
+        apiKeyEnvLabel: '密钥环境变量',
+        configKeysLabel: '配置键',
+        requiresLabel: '依赖行',
+        scopeLabel: '范围',
+        scopeAll: '全部 profile',
+        descBundle: '插件包：安装该包，并把它加入范围内 profile 的 dsh.profile.bundles。',
+        descProvider: '模型接入：通过 llm-pi-ai 行把 provider 配置注入范围内 profile。',
+        descItem: '配置行：写入范围内 profile 受管块的一条 loader 配置。',
         detailDrift: '与清单不一致：点「应用」按清单重写；或取消勾选，保留该 profile 的本地配置。',
         detailMissing: '该包尚未安装：点「应用」会先安装再选中。',
         detailUnknown: '读不到该 profile 的状态（目录不存在或读取失败）；先启动一次该 profile。',
@@ -108,6 +123,21 @@ window.__ModuleLoader__.load({
         notInScope: 'not in scope',
         scopeCellHint: 'Each checkbox sets whether this entry is written to that profile; click Save in the row after editing.',
         emptyScope: 'Keep at least one profile; delete the entry from the manifest to disable it everywhere.',
+        identifierLabel: 'Key',
+        specLabel: 'Spec',
+        providesLabel: 'Provides',
+        pruneLabel: 'Prune on uninstall',
+        apiLabel: 'API',
+        baseUrlLabel: 'Base URL',
+        modelsLabel: 'Models',
+        apiKeyEnvLabel: 'API key env',
+        configKeysLabel: 'Config keys',
+        requiresLabel: 'Requires',
+        scopeLabel: 'Scope',
+        scopeAll: 'all profiles',
+        descBundle: 'Bundle: installs the package and adds it to dsh.profile.bundles in scope.',
+        descProvider: 'Model provider: injects this provider config through the llm-pi-ai row.',
+        descItem: 'Config row: writes one loader entry into the managed block.',
         detailDrift: 'Differs from the manifest: click Apply to rewrite it, or uncheck to keep this profile\'s local config.',
         detailMissing: 'Not installed yet: Apply installs it before selecting the bundle.',
         detailUnknown: 'Profile state is unreadable (missing directory or read failure); start that profile once.',
@@ -162,6 +192,8 @@ window.__ModuleLoader__.load({
 
     const PROBLEM = new Set(['drift', 'missing', 'unknown', 'error'])
 
+    const KIND_LABEL = { bundle: 'tabBundles', provider: 'tabProviders', item: 'tabItems' }
+
     async function request(path, init) {
       const response = await fetch(API + path, {
         credentials: 'same-origin',
@@ -211,6 +243,7 @@ window.__ModuleLoader__.load({
         const [plan, setPlan] = useState(null)
         const [applyResult, setApplyResult] = useState(null)
         const [drafts, setDrafts] = useState({})
+        const [tip, setTip] = useState(null)
         const [toast, setToast] = useState(null)
 
         const load = useCallback(async () => {
@@ -277,6 +310,17 @@ window.__ModuleLoader__.load({
           entry.scope.includes('all') ? profiles.map((profile) => profile.name) : entry.scope
 
         const scopeOf = (entry) => drafts[entry.key] ?? expandedScope(entry)
+
+        const showTip = (event, entry) => {
+          const rect = event.currentTarget.getBoundingClientRect()
+          const width = 352
+          const gap = 10
+          const viewportWidth = typeof window === 'undefined' ? rect.right + gap + width : window.innerWidth
+          const viewportHeight = typeof window === 'undefined' ? rect.top + 420 : window.innerHeight
+          const left = rect.right + gap + width <= viewportWidth ? rect.right + gap : Math.max(8, rect.left - width - gap)
+          const top = Math.min(Math.max(8, rect.top), Math.max(8, viewportHeight - 400))
+          setTip({ key: entry.key, left, top })
+        }
 
         const toggleScope = (entry, profileName) => {
           setDrafts((current) => {
@@ -574,6 +618,44 @@ window.__ModuleLoader__.load({
           return t('notInScope')
         }
 
+        function tipRows(entry) {
+          const rows = [[t('identifierLabel'), entry.key]]
+          if (entry.kind === 'bundle') {
+            if (entry.spec) rows.push([t('specLabel'), entry.spec])
+            const provides = entry.details?.provides
+            if (Array.isArray(provides) && provides.length > 0) rows.push([t('providesLabel'), provides.join(', ')])
+            if (entry.details?.prune === true) rows.push([t('pruneLabel'), 'true'])
+          } else if (entry.kind === 'provider') {
+            const details = entry.details ?? {}
+            if (details.displayName) rows.push([t('specLabel'), details.displayName])
+            if (details.api) rows.push([t('apiLabel'), details.api])
+            if (details.baseURL) rows.push([t('baseUrlLabel'), details.baseURL])
+            if (typeof details.models === 'number') rows.push([t('modelsLabel'), String(details.models)])
+            if (details.apiKeyEnv) rows.push([t('apiKeyEnvLabel'), details.apiKeyEnv])
+          } else {
+            const details = entry.details ?? {}
+            if (details.name) rows.push([t('specLabel'), details.name])
+            if (Array.isArray(details.configKeys) && details.configKeys.length > 0) {
+              rows.push([t('configKeysLabel'), details.configKeys.join(', ')])
+            }
+            if (Array.isArray(details.requires) && details.requires.length > 0) {
+              rows.push([t('requiresLabel'), details.requires.join(', ')])
+            }
+          }
+          const scope = expandedScope(entry)
+          rows.push([t('scopeLabel'), scope.length === profiles.length ? t('scopeAll') : scope.join(', ')])
+          for (const profile of profiles) {
+            const status = entry.status?.[profile.name]
+            const problem = PROBLEM.has(status)
+            const label = t(STATUS_KEY[status] ?? 'unknown')
+            rows.push([profile.name, problem ? `⚠️ ${label} — ${scopeDetail(entry, profile.name, status)}` : label])
+          }
+          return rows.flatMap(([label, value], index) => [
+            h('div', { key: `label:${index}`, style: { opacity: 0.55 } }, label),
+            h('div', { key: `value:${index}`, style: { wordBreak: 'break-word' } }, value),
+          ])
+        }
+
         function rowFor(entry) {
           const dirty = isDirty(entry)
           return h(
@@ -581,11 +663,14 @@ window.__ModuleLoader__.load({
             { key: entry.key, style: dirty ? { background: 'rgba(230, 160, 40, 0.07)' } : undefined },
             h(
               'td',
-              { style: { ...cell, width: ENTRY_COL_WIDTH, maxWidth: ENTRY_COL_WIDTH, overflow: 'hidden' } },
+              {
+                style: { ...cell, width: ENTRY_COL_WIDTH, maxWidth: ENTRY_COL_WIDTH, overflow: 'hidden' },
+                onMouseEnter: (event) => showTip(event, entry),
+                onMouseLeave: () => setTip(null),
+              },
               h(
                 'div',
                 {
-                  title: entry.label,
                   style: {
                     fontWeight: 500,
                     fontSize: 13,
@@ -600,7 +685,6 @@ window.__ModuleLoader__.load({
                 ? h(
                     'div',
                     {
-                      title: entry.spec,
                       style: {
                         fontSize: 11,
                         opacity: 0.55,
@@ -782,6 +866,54 @@ window.__ModuleLoader__.load({
                   : null,
               )
 
+        const tipEntry = tip === null ? null : entries.find((entry) => entry.key === tip.key) ?? null
+        const tipCard =
+          tipEntry === null
+            ? null
+            : h(
+                'div',
+                {
+                  style: {
+                    position: 'fixed',
+                    left: tip.left,
+                    top: tip.top,
+                    width: 352,
+                    zIndex: 1000,
+                    pointerEvents: 'none',
+                    padding: '10px 12px',
+                    borderRadius: 10,
+                    fontSize: 12,
+                    lineHeight: '18px',
+                    border: '1px solid var(--dsw-alias-border-1, rgba(127,127,127,0.25))',
+                    background: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+                    boxShadow: '0 10px 28px rgba(0, 0, 0, 0.20)',
+                    color: 'inherit',
+                  },
+                },
+                h('div', { style: { fontWeight: 600, fontSize: 13, wordBreak: 'break-all' } }, tipEntry.label),
+                h('div', { style: { opacity: 0.6, marginTop: 2 } }, t(KIND_LABEL[tipEntry.kind] ?? 'descItem')),
+                h(
+                  'div',
+                  { style: { marginTop: 6, opacity: 0.85, whiteSpace: 'pre-wrap' } },
+                  tipEntry.description ??
+                    t(tipEntry.kind === 'bundle' ? 'descBundle' : tipEntry.kind === 'provider' ? 'descProvider' : 'descItem'),
+                ),
+                h(
+                  'div',
+                  {
+                    style: {
+                      marginTop: 8,
+                      paddingTop: 6,
+                      borderTop: '1px solid var(--dsw-alias-border-1, rgba(127,127,127,0.18))',
+                      display: 'grid',
+                      gridTemplateColumns: '76px 1fr',
+                      gap: '2px 8px',
+                    },
+                  },
+                  ...tipRows(tipEntry),
+                ),
+              )
+
         if (state === null) {
           return h(
             'div',
@@ -808,6 +940,7 @@ window.__ModuleLoader__.load({
           planBlock,
           resultBlock,
           h('div', { style: { marginTop: 12, fontSize: 11, opacity: 0.55 } }, `${t('scopeCellHint')} ${t('outOfScopeHint')}`),
+          tipCard,
         )
       }
     }

@@ -275,6 +275,38 @@ function providerEntryStatus(state, manifest, provider, profile, knownProfiles) 
   return sameValue(providers[provider.key], effectiveConfig(provider, profile)) ? 'in-sync' : 'drift'
 }
 
+/** Optional manifest description, surfaced by the settings page hover card. */
+function entryDescription(entry) {
+  return typeof entry?.description === 'string' ? entry.description : undefined
+}
+
+/** Small, non-secret facts about one manifest entry for the hover card. */
+function entryDetails(kind, entry) {
+  if (kind === 'bundle') {
+    return {
+      spec: entry.spec,
+      provides: Array.isArray(entry.provides) ? entry.provides : undefined,
+      prune: entry.prune === true ? true : undefined,
+    }
+  }
+  if (kind === 'provider') {
+    const config = entry.config && typeof entry.config === 'object' ? entry.config : {}
+    return {
+      displayName: typeof config.displayName === 'string' ? config.displayName : undefined,
+      api: typeof config.api === 'string' ? config.api : undefined,
+      baseURL: typeof config.baseURL === 'string' ? config.baseURL : undefined,
+      apiKeyEnv: typeof config.apiKeyEnv === 'string' ? config.apiKeyEnv : undefined,
+      models: Array.isArray(config.models) ? config.models.length : undefined,
+    }
+  }
+  const config = entry.config && typeof entry.config === 'object' ? entry.config : undefined
+  return {
+    name: typeof entry.name === 'string' ? entry.name : undefined,
+    configKeys: config ? Object.keys(config) : [],
+    requires: Array.isArray(entry.requires) ? entry.requires : undefined,
+  }
+}
+
 function buildItemList(snapshot) {
   const { manifest, knownProfiles, states } = snapshot
   if (!manifest) return []
@@ -302,6 +334,8 @@ function buildItemList(snapshot) {
       spec: bundle.spec,
       scope: resolveScope(bundle, knownProfiles),
       status,
+      description: entryDescription(bundle),
+      details: entryDetails('bundle', bundle),
     })
   }
 
@@ -317,6 +351,8 @@ function buildItemList(snapshot) {
       spec: provider.config?.displayName ?? provider.key,
       scope: resolveScope(provider, knownProfiles),
       status,
+      description: entryDescription(provider),
+      details: entryDetails('provider', provider),
     })
   }
 
@@ -336,6 +372,8 @@ function buildItemList(snapshot) {
       spec: item.name ?? '',
       scope: resolveScope(item, knownProfiles),
       status,
+      description: entryDescription(item),
+      details: entryDetails('item', item),
     })
   }
   return items

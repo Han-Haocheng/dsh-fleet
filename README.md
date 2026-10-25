@@ -41,6 +41,7 @@ profiles: [web, dsh-tui, desktop]
 providers:
   - key: openmodel
     scope: [all]                    # 所有 profile
+    description: 'OpenModel 模型目录（68 个模型）'
     config: { displayName, apiKeyEnv, api, baseURL, models: [...] }
     overrides:
       dsh-tui: { config: { retryPolicy: {...} } }   # 浅合并
@@ -49,12 +50,14 @@ bundles:
   - name: dsh-free-search
     spec: dsh-free-search@0.9.15    # 安装 spec；@deepseek-ai/* 用包名即可（随 DSH 提供）
     scope: [all]
+    description: '免费搜索与抓取（DDG / fs-quality-fetch）'
     provides: [ddg, fs-quality-fetch]   # 供校验器检查配置引用
 
 items:
   - id: web                         # loader 行 id
     name: '@deepseek-ai/dsh-web'    # 可选断言
     scope: [all]
+    description: 'web 搜索与抓取供应商'
     config: { searchProvider: ddg, fetchProvider: fs-quality-fetch }
     overrides:
       dsh-tui: { config: { searchProvider: deepseek-search-api, fetchProvider: http } }
@@ -68,6 +71,7 @@ items:
 ```
 
 `config` 与 DSH patch 语义一致：**整段替换，不做深合并**。`overrides` 是唯一例外：与基座浅合并。
+`description` 是三个类型都支持的可选字段，只用于设置页的悬浮说明，不参与渲染与校验（但必须是字符串）。
 
 ## 安装到各 profile
 
@@ -104,6 +108,7 @@ Settings → **多 Profile 管理**：
 - 主体按 **插件包 / 模型接入 / 配置行** 三个页签分开，不再混在一张长表里，页签上带条目数；
 - 每个页签内支持按名称/标识搜索、勾选“只看问题”，表格按 profile 列展示状态；
 - 每列勾选框直接切换该条目是否写入该 profile，改完行尾才出现「保存」；有问题的单元格显示 ⚠️，悬浮查看原因；
+- 鼠标悬浮**条目名称**显示详情卡：类型、标识、安装 spec、provider / 配置要点、范围与各 profile 当前状态；在清单里给条目写 `description` 可自定义说明文字；
 - “预览变更 / 应用”在底部给出待应用清单、待安装包、备份与需重启提示。
 
 ### Agent 工具（三个 profile 都可用，TUI 也适用）
