@@ -61,6 +61,29 @@ test('buildPlan reports missing blocks, bundle changes and pending installs', (t
   assert.equal(patchChange.detail, 'managed block is missing')
 })
 
+test('buildPlan upgrades a bundle whose installed version differs from the spec', (t) => {
+  const home = makeHome(t)
+  const install = makeInstallation(t, BASE_BUNDLE)
+  makeProfile(home, 'web', {
+    bundles: ['@deepseek-ai/dsh-base', 'dsh-mnemon'],
+    dependencies: { 'dsh-mnemon': '1.0.0' },
+    packages: { 'dsh-mnemon': { version: '1.0.0' } },
+  })
+  const manifest = baseManifest({
+    profiles: ['web'],
+    bundles: [{ name: 'dsh-mnemon', spec: 'dsh-mnemon@1.1.0', scope: ['all'] }],
+    items: [],
+  })
+  const states = readStates(home, install, manifest.profiles)
+  const plan = buildPlan({ manifest, knownProfiles: manifest.profiles, states, capabilities: () => 'cli' })
+  assert.deepEqual(plan.errors, [])
+  assert.deepEqual(plan.pendingInstalls, [
+    { profile: 'web', bundle: 'dsh-mnemon', spec: 'dsh-mnemon@1.1.0', capability: 'cli', outdated: true, from: '1.0.0' },
+  ])
+  const change = plan.changes.find((entry) => entry.kind === 'install')
+  assert.equal(change.detail, 'upgrade dsh-mnemon 1.0.0 → 1.1.0 (cli)')
+})
+
 test('buildPlan never writes to disk', (t) => {
   const home = makeHome(t)
   const install = makeInstallation(t, BASE_BUNDLE)

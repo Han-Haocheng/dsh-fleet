@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.2 — 插件元数据、版本漂移与回滚
+
+### 新增
+
+- 插件条目显示包自带的中文名（`locale/zh.json` 的 `meta.title`，缺失时回退包名），悬浮卡显示全名、版本与描述；
+  描述优先级为清单 `description` > 包 `locale/zh.json` > `package.json`。清单条目新增可选 `title` / `description`（三种类型都支持）。
+- 版本漂移检测：已安装版本与 `name@x.y.z` spec 不一致时状态标为「版本不一致」，`apply` 会先升级再写配置。
+- 未纳管插件：列出 profile 已启用但清单没有的 bundle，可一键「纳入清单」（自动带版本与所在 profile）。
+- 回滚：`restore` 动作 / CLI 命令 / 设置页按钮，恢复最近一次 apply 前的 `package.json` 与 `cordis.patch.yml`；回滚前再备份当前内容。
+- `doctor` 诊断：清单校验、home 层覆盖、写锁残留、profile 缺失、安装能力、版本漂移、未纳管、备份、拒绝日志体积。
+- 批量保存「保存全部」与未保存修改的离开确认。
+
+### 修复
+
+- 清单 `spec` 变更此前被静默忽略（只按包名判断是否已装），现在会检测并升级。
+- 版本解析补充到 profile 状态，供状态矩阵与诊断复用。
+
+### 说明
+
+- 版本比较仅适用于 `name@x.y.z` 形式的 spec；git / 路径 spec 不参与。
+- 未纳管检测目前覆盖 bundle 选择，不覆盖手写配置行与 provider。
+
 ## 0.1.1 — 首个公开发布
 
 ### 新增

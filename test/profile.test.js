@@ -140,6 +140,10 @@ test('readProfileState reads bundles, dependencies, patch text, installed packag
   assert.equal(state.patchText, userPatch)
   assert.ok(state.installed instanceof Set)
   assert.deepEqual([...state.installed].sort(), ['@deepseek-ai/dsh-base', 'dsh-mnemon', 'plain-dep'])
+  assert.deepEqual(
+    [...state.versions.entries()].sort(),
+    [['@deepseek-ai/dsh-base', '0.1.0'], ['dsh-mnemon', '1.0.0'], ['plain-dep', '2.0.0']],
+  )
   assert.ok(state.rowIds instanceof Set)
   for (const id of ['base-row', 'base-child', 'mnemon', 'mnemon-source', 'user-row']) {
     assert.ok(state.rowIds.has(id), `expected row id ${id}`)

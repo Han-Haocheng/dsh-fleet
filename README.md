@@ -19,6 +19,9 @@
 - 配置行（`ui-theme`、`permission`、`mnemon`、`web` 等）集中维护，避免同一行在多个 profile 里漂移。
 - 每个条目声明 `scope`：**不在范围内的 profile 不会写入、不会安装、不会生效**。
 - 悬空引用（例如 `web.searchProvider: ddg` 却没有装 `dsh-free-search`）在写文件前被校验器拒绝。
+- 版本漂移（清单 `spec` 与已安装版本不一致）会被标出，`apply` 时先升级再写配置。
+- profile 里已启用、但清单里没有的插件会列在「未纳管」里，可一键纳入清单。
+- 误操作可以回滚到最近一次 `apply` 前的备份；`doctor` 一次检查 home 层覆盖、残留锁、缺失 profile、安装能力与版本。
 
 ## 作用域语义（重点）
 
@@ -80,8 +83,8 @@ items:
 发布版从 GitHub tag 安装（web / dsh-tui）：
 
 ```bash
-dsh plugin --profile web add "github:Han-Haocheng/dsh-fleet#v0.1.1"
-dsh plugin --profile dsh-tui add "github:Han-Haocheng/dsh-fleet#v0.1.1"
+dsh plugin --profile web add "github:Han-Haocheng/dsh-fleet#v0.1.2"
+dsh plugin --profile dsh-tui add "github:Han-Haocheng/dsh-fleet#v0.1.2"
 ```
 
 本地开发时把 spec 换成 checkout 路径：
@@ -113,6 +116,10 @@ Settings → **多 Profile 管理**：
 - 条目显示插件的中文名（读取包的 `locale/zh.json` 中 `meta.title`，没有则回退到包名）；
 - 鼠标悬浮**条目名称**显示详情卡：全名、版本、描述、安装 spec、provider / 配置要点、范围与各 profile 当前状态；
 - 描述优先级：清单条目的 `description` > 包的 `locale/zh.json` `meta.description` > 包的 `package.json` `description`；
+- 多行改动后可点「保存全部」；有未保存修改时刷新或关闭页面会弹离开确认；
+- 插件包页签底部列出「未纳管插件」，带版本与所在 profile，可一键「纳入清单」；
+- 「诊断」按钮输出环境检查（清单、home 层、写锁、profile、安装能力、版本、备份）；
+- 有可用备份时显示「回滚上次应用」，回滚前会先备份当前内容，回滚本身也可撤销；
 - “预览变更 / 应用”在底部给出待应用清单、待安装包、备份与需重启提示。
 
 ### Agent 工具（三个 profile 都可用，TUI 也适用）
@@ -122,6 +129,9 @@ fleet(action="status")                          # 矩阵
 fleet(action="plan")                            # 干跑
 fleet(action="apply", profiles=["desktop"])     # 安装缺包 + 写受管块
 fleet(action="scope", key="item:web", scope=["web","desktop"])
+fleet(action="adopt", name="dsh-extra-bundle")  # 把已在 profile 启用的包纳入清单
+fleet(action="restore")                         # 回滚到最近一次 apply 前的备份
+fleet(action="doctor")                          # 环境诊断
 fleet(action="install")                         # 只补装缺包
 ```
 
@@ -132,6 +142,9 @@ node scripts/fleet.mjs status
 node scripts/fleet.mjs plan
 node scripts/fleet.mjs apply --profiles web,dsh-tui
 node scripts/fleet.mjs apply --dry-run
+node scripts/fleet.mjs restore --profiles web   # 恢复最近一次 apply 前的备份
+node scripts/fleet.mjs restore --stamp <ts>
+node scripts/fleet.mjs doctor
 ```
 
 离线 CLI 的安装能力：当前机器上的 CLI profile 走 `dsh plugin --profile <p> add`；
@@ -160,11 +173,17 @@ node scripts/seed.mjs             # 写 ~/.dsh/fleet.yml（已有则先备份）
 
 ## 回滚 / 卸载
 
-```bash
-# 恢复某个文件
-cp ~/.dsh/profiles/web/cordis.patch.yml.bak-fleet-<ts> ~/.dsh/profiles/web/cordis.patch.yml
+每次 `apply` 前会备份 `package.json` 与 `cordis.patch.yml`（`*.bak-fleet-<时间戳>`，每个文件保留最近 5 份）。
 
-# 移除受管块：删掉 # >>> dsh-fleet … # <<< dsh-fleet 之间的内容
+```bash
+node scripts/fleet.mjs restore --profiles web,dsh-tui   # 恢复每个 profile 最近一份备份
+node scripts/fleet.mjs restore --stamp <时间戳>          # 恢复指定一代备份
+```
+
+设置页底部在有备份时显示「回滚上次应用」。回滚前还会把当前内容再备份一次，所以回滚本身也可以撤销。
+
+```bash
+# 手动移除受管块：删掉 # >>> dsh-fleet … # <<< dsh-fleet 之间的内容
 # 卸载插件包：plugin_manager remove_bundle（或 dsh plugin --profile <p> remove dsh-fleet）
 ```
 
@@ -179,6 +198,8 @@ cp ~/.dsh/profiles/web/cordis.patch.yml.bak-fleet-<ts> ~/.dsh/profiles/web/cordi
   先在插件管理器里显式批准这些构建（或 `plugin_manager install_bundle` 传 `approvedBuilds`），
   本插件的 `apply` 不会替你静默批准。
 - 清单里 `dsh-fleet` 自身的 `spec` 是本机绝对路径；移动仓库目录后需要同步改这一行。
+- 版本检测只对 `name@x.y.z` 形式的 spec 生效；git、路径、无版本 spec 不参与版本比较。
+- 未纳管检测目前只覆盖 `dsh.profile.bundles` 的选择，不覆盖手写配置行 / provider。
 - HTTP 接口仅监听回环并要求同源来源（`127.0.0.1`、`localhost`、`[::1]` 视为同一本地源；
   带 `Sec-Fetch-Site: same-origin` 或 DSH 会话 Cookie 的同源请求也放行）；跨源与反向代理来源的写操作会被拒绝（读状态仍可用）。
   被拒绝的请求会以一行 JSON 记到 `$DSH_HOME/fleet.reject.log`（含 host/origin/sec-fetch-site，不含 Cookie 值），便于定位。

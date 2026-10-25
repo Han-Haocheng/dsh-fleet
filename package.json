@@ -1,6 +1,6 @@
 {
   "name": "dsh-fleet",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Unified profile manager for DeepSeek Harness: install plugins, model providers and config rows per profile from one manifest, with per-entry scope locking.",
   "license": "MIT",

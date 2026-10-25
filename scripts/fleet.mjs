@@ -26,13 +26,15 @@ import {
   acquireLock,
 } from '../lib/profile.js'
 import { buildPlan, applyPlan } from '../lib/plan.js'
+import { listProfileBackups, restoreProfileBackups } from '../lib/restore.js'
+import { doctorReport } from '../lib/doctor.js'
 import { capabilityFor, installViaCli } from '../lib/install.js'
 
 function usage() {
   return `dsh-fleet — manage DSH profiles from one manifest
 
 Usage:
-  node scripts/fleet.mjs <status|plan|apply> [options]
+  node scripts/fleet.mjs <status|plan|apply|restore|doctor> [options]
 
 Options:
   --home <dir>             DSH home (default: $DSH_HOME or ~/.dsh)
@@ -41,6 +43,7 @@ Options:
   --dsh-bin <path>         CLI used for installs (default: dsh)
   --profiles a,b           limit to these profiles
   --dry-run                plan only
+  --stamp <timestamp>      for restore: restore backups carrying this stamp
   --no-install             do not install missing packages; refuse apply if any are missing
   --json                   machine-readable output
 
@@ -191,7 +194,10 @@ function printPlan(context, plan, targets) {
   }
   for (const install of plan.pendingInstalls) {
     const manual = install.capability === 'manual' ? ' (manual: run from inside desktop)' : ''
-    console.log(`[${install.profile}] install: ${install.spec}${manual}`)
+    const label = install.outdated
+      ? `upgrade: ${install.bundle} ${install.from} -> ${install.spec.slice(install.bundle.length + 1)}`
+      : `install: ${install.spec}`
+    console.log(`[${install.profile}] ${label}${manual}`)
   }
   if (plan.changes.length === 0 && plan.pendingInstalls.length === 0 && plan.errors.length === 0) {
     console.log(`in sync: ${targets.join(', ')}`)
@@ -229,13 +235,73 @@ async function main() {
     console.log(usage())
     return 0
   }
-  if (!['status', 'plan', 'apply'].includes(args.command)) {
+  if (!['status', 'plan', 'apply', 'restore', 'doctor'].includes(args.command)) {
     console.error(`unknown command: ${args.command}`)
     console.error(usage())
     return 2
   }
   const context = await buildContext(args)
   const targets = selectProfiles(context, args.flags.profiles)
+  if (args.command === 'doctor') {
+    const backups = []
+    for (const profile of context.knownProfiles) {
+      const state = context.states.get(profile)
+      if (!state?.present || typeof state.dir !== 'string') continue
+      const entries = listProfileBackups(state.dir)
+      if (entries.length > 0) backups.push({ profile, count: entries.length, latest: entries[0].stamp })
+    }
+    const managed = new Set((context.manifest?.bundles ?? []).map((bundle) => bundle.name))
+    const unmanaged = new Map()
+    for (const profile of context.knownProfiles) {
+      const state = context.states.get(profile)
+      for (const name of state?.bundles ?? []) {
+        if (typeof name === 'string' && name !== '' && !managed.has(name)) unmanaged.set(name, { name })
+      }
+    }
+    let lock = { held: false, owner: null }
+    if (existsSync(join(context.home, 'fleet.lock'))) {
+      let owner = null
+      try {
+        owner = JSON.parse(await readFile(join(context.home, 'fleet.lock'), 'utf8')).owner ?? null
+      } catch {
+        // A malformed lock still means somebody wrote it.
+      }
+      lock = { held: true, owner }
+    }
+    const plan = context.manifestErrors.length === 0
+      ? buildPlan({
+          manifest: context.manifest,
+          knownProfiles: context.knownProfiles,
+          states: context.states,
+          capabilities: context.capabilities,
+        })
+      : { pendingInstalls: [] }
+    const report = await doctorReport({
+      home: context.home,
+      manifestPath: join(context.home, 'fleet.yml'),
+      currentProfile: null,
+      knownProfiles: context.knownProfiles,
+      states: context.states,
+      manifestErrors: context.manifestErrors,
+      plan,
+      backups,
+      unmanaged: [...unmanaged.values()],
+      lock,
+      capability: context.capabilities,
+    })
+    if (args.flags.json) {
+      console.log(JSON.stringify(report, null, 2))
+    } else {
+      console.log(`dsh-fleet doctor: ${report.ok ? 'ok' : 'problems found'}`)
+      for (const check of report.checks) {
+        const icon = check.level === 'error' ? 'ERROR' : check.level === 'warn' ? 'WARN' : check.level === 'ok' ? ' ok ' : 'info'
+        console.log(`  [${icon}] ${check.title}: ${check.detail}`)
+        if (check.fix) console.log(`         fix: ${check.fix}`)
+      }
+    }
+    return report.ok ? 0 : 1
+  }
+
   if (context.manifestErrors.length > 0) {
     if (args.flags.json) {
       console.log(JSON.stringify({ ok: false, errors: context.manifestErrors }, null, 2))
@@ -245,6 +311,37 @@ async function main() {
     }
     return 2
   }
+  if (args.command === 'restore') {
+    const lock = await acquireLock(context.home, { owner: 'dsh-fleet:cli:restore' })
+    if (!lock.ok) {
+      console.error(`manifest is busy (owner: ${lock.owner ?? 'unknown'})`)
+      return 2
+    }
+    try {
+      const restored = []
+      const errors = []
+      for (const profile of targets) {
+        const state = context.states.get(profile)
+        if (!state?.present || typeof state.dir !== 'string') continue
+        const result = restoreProfileBackups(state.dir, args.flags.stamp ? { stamp: args.flags.stamp } : {})
+        for (const error of result.errors) errors.push(`${profile}: ${error}`)
+        if (result.restored.length > 0) {
+          restored.push({ profile, files: result.restored.map((entry) => entry.file), stamp: result.restored[0].stamp })
+        }
+      }
+      if (args.flags.json) {
+        console.log(JSON.stringify({ ok: errors.length === 0, restored, errors }, null, 2))
+      } else {
+        for (const entry of restored) console.log(`restored [${entry.profile}] ${entry.files.join(', ')} (${entry.stamp})`)
+        for (const error of errors) console.error(`error: ${error}`)
+        if (restored.length === 0 && errors.length === 0) console.error('no fleet backups to restore')
+      }
+      return errors.length === 0 && restored.length > 0 ? 0 : 1
+    } finally {
+      await lock.release()
+    }
+  }
+
   const plan = buildPlan({
     manifest: context.manifest,
     knownProfiles: context.knownProfiles,

@@ -12,6 +12,9 @@ window.__ModuleLoader__.load({
         title: '多 Profile 管理',
         subtitle: '一份清单管理 web / TUI / Desktop 的插件、模型接入与配置；范围外的条目不生效。',
         refresh: '刷新',
+        doctor: '诊断',
+        doctorOk: '没有阻断问题',
+        doctorProblems: '发现问题',
         plan: '预览变更',
         apply: '应用',
         applyConfirm: '将写入受管块并对账 bundle 选择（缺包会先安装），继续？',
@@ -27,6 +30,14 @@ window.__ModuleLoader__.load({
         loading: '加载中…',
         loadFailed: '加载失败',
         inSync: '已同步',
+        outdated: '版本不一致',
+        unmanagedTitle: '未纳管插件',
+        unmanagedHint: '这些插件已在 profile 中启用，但不在清单里；纳入后才会参与同步与版本管理。',
+        adopt: '纳入清单',
+        adopted: '已纳入清单',
+        adoptFailed: '纳入失败',
+        coreBundle: '随 DSH 提供',
+        profilesLabel: 'profile',
         drift: '漂移',
         missing: '缺包',
         outOfScope: '范围外',
@@ -38,6 +49,15 @@ window.__ModuleLoader__.load({
         saveScope: '保存范围',
         actions: '操作',
         save: '保存',
+        saveAll: '保存全部',
+        discard: '放弃修改',
+        unsaved: '项未保存',
+        unsavedLeave: '有未保存的范围修改，确定离开？',
+        rollback: '回滚上次应用',
+        rollbackConfirm: '回滚会用最近一次备份覆盖 package.json 与 cordis.patch.yml，继续？',
+        restored: '已回滚到最近备份',
+        restoreFailed: '回滚失败',
+        backupAvailable: '可回滚备份',
         saved: '范围已保存；点「应用」写入对应 profile。',
         inScope: '在范围内',
         notInScope: '不在范围',
@@ -61,6 +81,7 @@ window.__ModuleLoader__.load({
         descProvider: '模型接入：通过 llm-pi-ai 行把 provider 配置注入范围内 profile。',
         descItem: '配置行：写入范围内 profile 受管块的一条 loader 配置。',
         detailDrift: '与清单不一致：点「应用」按清单重写；或取消勾选，保留该 profile 的本地配置。',
+        detailOutdated: '版本不一致：已装 {installed}，清单要求 {expected}；点「应用」会升级。',
         detailMissing: '该包尚未安装：点「应用」会先安装再选中。',
         detailUnknown: '读不到该 profile 的状态（目录不存在或读取失败）；先启动一次该 profile。',
         detailError: '状态读取出错：查看清单错误或 fleet.reject.log。',
@@ -94,6 +115,9 @@ window.__ModuleLoader__.load({
         title: 'Profiles',
         subtitle: 'One manifest for plugins, model providers and config across web / TUI / Desktop; out-of-scope entries do not apply.',
         refresh: 'Refresh',
+        doctor: 'Diagnose',
+        doctorOk: 'no blocking problems',
+        doctorProblems: 'problems found',
         plan: 'Preview',
         apply: 'Apply',
         applyConfirm: 'This writes managed blocks and reconciles bundle selections (missing packages install first). Continue?',
@@ -109,6 +133,14 @@ window.__ModuleLoader__.load({
         loading: 'Loading…',
         loadFailed: 'Failed to load',
         inSync: 'in sync',
+        outdated: 'version differs',
+        unmanagedTitle: 'Unmanaged bundles',
+        unmanagedHint: 'These bundles are enabled in a profile but not in the manifest; adopt one to manage it here.',
+        adopt: 'Adopt',
+        adopted: 'Adopted into the manifest',
+        adoptFailed: 'Adopt failed',
+        coreBundle: 'ships with DSH',
+        profilesLabel: 'profiles',
         drift: 'drift',
         missing: 'missing',
         outOfScope: 'out of scope',
@@ -120,6 +152,15 @@ window.__ModuleLoader__.load({
         saveScope: 'Save',
         actions: 'Actions',
         save: 'Save',
+        saveAll: 'Save all',
+        discard: 'Discard',
+        unsaved: 'unsaved',
+        unsavedLeave: 'You have unsaved scope changes. Leave anyway?',
+        rollback: 'Roll back last apply',
+        rollbackConfirm: 'Rolling back overwrites package.json and cordis.patch.yml with the newest backups. Continue?',
+        restored: 'Rolled back to the newest backups',
+        restoreFailed: 'Rollback failed',
+        backupAvailable: 'Restorable backups',
         saved: 'Scope saved; click Apply to write it to the profiles.',
         inScope: 'in scope',
         notInScope: 'not in scope',
@@ -143,6 +184,7 @@ window.__ModuleLoader__.load({
         descProvider: 'Model provider: injects this provider config through the llm-pi-ai row.',
         descItem: 'Config row: writes one loader entry into the managed block.',
         detailDrift: 'Differs from the manifest: click Apply to rewrite it, or uncheck to keep this profile\'s local config.',
+        detailOutdated: 'Version differs: installed {installed}, manifest wants {expected}; Apply upgrades it.',
         detailMissing: 'Not installed yet: Apply installs it before selecting the bundle.',
         detailUnknown: 'Profile state is unreadable (missing directory or read failure); start that profile once.',
         detailError: 'Status read failed: check manifest errors or fleet.reject.log.',
@@ -177,6 +219,7 @@ window.__ModuleLoader__.load({
     const TONE = {
       'in-sync': { bg: 'var(--dsw-alias-bg-layer-3, rgba(127,127,127,0.12))', fg: 'var(--dsw-alias-text-2, #757575)' },
       drift: { bg: 'rgba(230, 160, 40, 0.16)', fg: '#a86b16' },
+      outdated: { bg: 'rgba(230, 160, 40, 0.16)', fg: '#a86b16' },
       missing: { bg: 'rgba(220, 80, 80, 0.14)', fg: '#b43c3c' },
       'out-of-scope': { bg: 'rgba(127,127,127,0.07)', fg: 'var(--dsw-alias-text-3, #9e9e9e)' },
       unknown: { bg: 'rgba(127,127,127,0.07)', fg: 'var(--dsw-alias-text-3, #9e9e9e)' },
@@ -187,6 +230,7 @@ window.__ModuleLoader__.load({
     const STATUS_KEY = {
       'in-sync': 'inSync',
       drift: 'drift',
+      outdated: 'outdated',
       missing: 'missing',
       'out-of-scope': 'outOfScope',
       unknown: 'unknown',
@@ -194,7 +238,7 @@ window.__ModuleLoader__.load({
       pending: 'pending',
     }
 
-    const PROBLEM = new Set(['drift', 'missing', 'unknown', 'error'])
+    const PROBLEM = new Set(['drift', 'outdated', 'missing', 'unknown', 'error'])
 
     const KIND_LABEL = { bundle: 'tabBundles', provider: 'tabProviders', item: 'tabItems' }
 
@@ -246,7 +290,20 @@ window.__ModuleLoader__.load({
         const [problemOnly, setProblemOnly] = useState(false)
         const [plan, setPlan] = useState(null)
         const [applyResult, setApplyResult] = useState(null)
+        const [doctor, setDoctor] = useState(null)
         const [drafts, setDrafts] = useState({})
+        const dirtyCount = Object.keys(drafts).length
+        useEffect(() => {
+          if (dirtyCount === 0) return undefined
+          if (typeof window.addEventListener !== 'function') return undefined
+          const guard = (event) => {
+            event.preventDefault()
+            event.returnValue = ''
+            return ''
+          }
+          window.addEventListener('beforeunload', guard)
+          return () => window.removeEventListener('beforeunload', guard)
+        }, [dirtyCount])
         const [tip, setTip] = useState(null)
         const [toast, setToast] = useState(null)
 
@@ -375,6 +432,94 @@ window.__ModuleLoader__.load({
           }
         }
 
+        const adoptBundle = async (entry) => {
+          setBusy(`adopt:${entry.name}`)
+          try {
+            const payload = await request('/adopt', {
+              method: 'POST',
+              body: JSON.stringify({ name: entry.name }),
+            })
+            if (payload.ok) {
+              if (payload.state) setState(payload.state)
+              setToast({ kind: 'ok', text: t('adopted') })
+            } else {
+              setToast({ kind: 'error', text: (payload.errors ?? []).join('\n') || t('adoptFailed') })
+            }
+          } catch (reason) {
+            setToast({ kind: 'error', text: String(reason) })
+          } finally {
+            setBusy(null)
+          }
+        }
+
+        const saveAllScopes = async () => {
+          const pending = entries.filter((entry) => Object.prototype.hasOwnProperty.call(drafts, entry.key))
+          if (pending.length === 0) return
+          setBusy('scope:all')
+          const failures = []
+          for (const entry of pending) {
+            const scope = drafts[entry.key] ?? expandedScope(entry)
+            if (scope.length === 0) {
+              failures.push(`${entry.label}: ${t('emptyScope')}`)
+              continue
+            }
+            try {
+              const payload = await request('/scope', {
+                method: 'POST',
+                body: JSON.stringify({ key: entry.key, scope }),
+              })
+              if (!payload.ok) {
+                failures.push(`${entry.label}: ${(payload.errors ?? []).join('; ')}`)
+                continue
+              }
+              setDrafts((current) => {
+                const next = { ...current }
+                delete next[entry.key]
+                return next
+              })
+              if (payload.state) setState(payload.state)
+            } catch (reason) {
+              failures.push(`${entry.label}: ${String(reason)}`)
+            }
+          }
+          setBusy(null)
+          setToast(
+            failures.length > 0
+              ? { kind: 'error', text: failures.join('\n') }
+              : { kind: 'ok', text: t('saved') },
+          )
+        }
+
+        const runDoctor = async () => {
+          setBusy('doctor')
+          try {
+            const payload = await request('/doctor')
+            setDoctor(payload)
+          } catch (reason) {
+            setToast({ kind: 'error', text: String(reason) })
+          } finally {
+            setBusy(null)
+          }
+        }
+
+        const restoreLast = async () => {
+          if (typeof window.confirm === 'function' && !window.confirm(t('rollbackConfirm'))) return
+          setBusy('restore')
+          try {
+            const payload = await request('/restore', { method: 'POST', body: '{}' })
+            if (payload.ok) {
+              if (payload.state) setState(payload.state)
+              setToast({ kind: 'ok', text: t('restored') })
+            } else {
+              setToast({ kind: 'error', text: (payload.errors ?? []).join('\n') || t('restoreFailed') })
+            }
+          } catch (reason) {
+            setToast({ kind: 'error', text: String(reason) })
+          } finally {
+            setBusy(null)
+          }
+        }
+
         const kindEntries = (kind) => entries.filter((entry) => entry.kind === kind)
         const counts = {
           bundles: kindEntries('bundle').length,
@@ -444,6 +589,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+            h('button', { style: buttonStyle(Boolean(busy)), disabled: Boolean(busy), onClick: runDoctor }, busy === 'doctor' ? '…' : t('doctor')),
             h('button', { style: buttonStyle(Boolean(busy)), disabled: Boolean(busy), onClick: load }, t('refresh')),
             h('button', { style: buttonStyle(Boolean(busy)), disabled: Boolean(busy), onClick: runPlan }, busy === 'plan' ? '…' : t('plan')),
             h('button', { style: primaryButton, disabled: Boolean(busy), onClick: runApply }, busy === 'apply' ? '…' : t('apply')),
@@ -615,7 +761,74 @@ window.__ModuleLoader__.load({
             label,
           )
 
+        const dirtyEntries = entries.filter((entry) => Object.prototype.hasOwnProperty.call(drafts, entry.key))
+        const dirtyBar =
+          dirtyEntries.length === 0
+            ? null
+            : h(
+                'div',
+                {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    marginTop: 8,
+                    fontSize: 12,
+                    color: '#a86b16',
+                  },
+                },
+                h('span', null, `${dirtyEntries.length} ${t('unsaved')}`),
+                smallButton(() => saveAllScopes(), busy === 'scope:all' ? '…' : t('saveAll'), Boolean(busy)),
+                smallButton(() => setDrafts({}), t('discard'), Boolean(busy)),
+              )
+
+        const backups = Array.isArray(state?.backups) ? state.backups : []
+        const maintenanceBlock =
+          backups.length === 0
+            ? null
+            : h(
+                'div',
+                {
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    marginTop: 10,
+                    fontSize: 12,
+                    opacity: 0.85,
+                  },
+                },
+                h('span', null, `${t('backupAvailable')}: ${backups.map((entry) => entry.profile).join(', ')}`),
+                smallButton(() => restoreLast(), busy === 'restore' ? '…' : t('rollback'), Boolean(busy)),
+              )
+
+        const doctorBlock =
+          doctor === null
+            ? null
+            : h(
+                'div',
+                { style: { ...cardStyle, marginTop: 10, fontSize: 12 } },
+                h(
+                  'div',
+                  { style: { fontWeight: 600, marginBottom: 4 } },
+                  `${t('doctor')} · ${doctor.ok ? t('doctorOk') : t('doctorProblems')}`,
+                ),
+                ...(doctor.checks ?? []).map((check, index) =>
+                  h(
+                    'div',
+                    { key: index, style: { marginTop: 3, whiteSpace: 'pre-wrap' } },
+                    `${check.level === 'error' ? '⛔' : check.level === 'warn' ? '⚠️' : '✅'} ${check.title}: ${check.detail}`,
+                  ),
+                ),
+              )
+
         function scopeDetail(entry, profileName, status) {
+          if (status === 'outdated') {
+            const details = entry.details ?? {}
+            const installed = details.installedVersions?.[profileName] ?? '?'
+            const expected = details.expectedVersion ?? '?'
+            return t('detailOutdated').replace('{installed}', installed).replace('{expected}', expected)
+          }
           if (status === 'missing') return t('detailMissing')
           if (status === 'drift') return t('detailDrift')
           if (status === 'unknown') return t('detailUnknown')
@@ -783,6 +996,65 @@ window.__ModuleLoader__.load({
                     ),
                   ),
                   h('tbody', null, visible.flatMap((entry) => rowFor(entry))),
+                ),
+              )
+
+        const unmanagedEntries = Array.isArray(state?.unmanaged) ? state.unmanaged : []
+        const unmanagedBlock =
+          tab !== 'bundles' || unmanagedEntries.length === 0
+            ? null
+            : h(
+                'div',
+                { style: { ...cardStyle, marginTop: 10 } },
+                h(
+                  'div',
+                  null,
+                  h('span', { style: { fontWeight: 600, fontSize: 13 } }, `${t('unmanagedTitle')} (${unmanagedEntries.length})`),
+                  h('span', { style: { marginLeft: 8, fontSize: 11, opacity: 0.6 } }, t('unmanagedHint')),
+                ),
+                h(
+                  'table',
+                  { style: { borderCollapse: 'collapse', width: '100%', marginTop: 6, fontSize: 12 } },
+                  h(
+                    'thead',
+                    null,
+                    h(
+                      'tr',
+                      null,
+                      h('th', { style: { ...headCell, textAlign: 'left' } }, t('item')),
+                      h('th', { style: { ...headCell, textAlign: 'left' } }, t('profilesLabel')),
+                      h('th', { style: { ...headCell, textAlign: 'left' } }, t('versionLabel')),
+                      h('th', { style: { ...headCell, width: ACTIONS_COL_WIDTH, textAlign: 'right' } }, t('actions')),
+                    ),
+                  ),
+                  h(
+                    'tbody',
+                    null,
+                    unmanagedEntries.map((entry) =>
+                      h(
+                        'tr',
+                        { key: entry.name },
+                        h('td', { style: { ...cell, wordBreak: 'break-all' } }, entry.name),
+                        h('td', { style: { ...cell, whiteSpace: 'nowrap' } }, entry.profiles.join(', ')),
+                        h(
+                          'td',
+                          { style: { ...cell, whiteSpace: 'nowrap' } },
+                          entry.core
+                            ? `${entry.version ?? '—'} · ${t('coreBundle')}`
+                            : entry.version ?? '—',
+                        ),
+                        h(
+                          'td',
+                          { style: { ...cell, textAlign: 'right' } },
+                          smallButton(
+                            () => adoptBundle(entry),
+                            busy === `adopt:${entry.name}` ? '…' : t('adopt'),
+                            Boolean(busy),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               )
 
@@ -956,9 +1228,13 @@ window.__ModuleLoader__.load({
           toastBlock,
           profileCards,
           toolbar,
+          dirtyBar,
           table,
+          unmanagedBlock,
           planBlock,
           resultBlock,
+          maintenanceBlock,
+          doctorBlock,
           h('div', { style: { marginTop: 12, fontSize: 11, opacity: 0.55 } }, `${t('scopeCellHint')} ${t('outOfScopeHint')}`),
           tipCard,
         )

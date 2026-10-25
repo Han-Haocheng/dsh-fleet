@@ -11,7 +11,7 @@
  * Nothing here trusts the manifest: lib/plan.js validates every reference
  * before any file is written.
  */
-import { appendFile, readFile, stat } from 'node:fs/promises'
+import { appendFile, readFile, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import { homedir } from 'node:os'
 import YAML from 'yaml'
@@ -40,7 +40,9 @@ import {
   acquireLock,
   resolveBundleDir,
 } from './lib/profile.js'
-import { buildPlan, applyPlan } from './lib/plan.js'
+import { buildPlan, applyPlan, expectedSpecVersion } from './lib/plan.js'
+import { listProfileBackups, restoreProfileBackups } from './lib/restore.js'
+import { doctorReport } from './lib/doctor.js'
 import { capabilityFor, installInCurrentProfile, installViaCli } from './lib/install.js'
 
 export const name = 'dsh-fleet'
@@ -367,6 +369,13 @@ function entryDetails(kind, entry) {
   }
 }
 
+function stateVersionOf(state, name) {
+  const versions = state?.versions
+  if (versions instanceof Map) return versions.get(name) ?? null
+  if (versions !== null && typeof versions === 'object') return versions[name] ?? null
+  return null
+}
+
 async function buildItemList(snapshot, env) {
   const { manifest, knownProfiles, states } = snapshot
   if (!manifest) return []
@@ -381,13 +390,26 @@ async function buildItemList(snapshot, env) {
 
   for (const bundle of manifest.bundles) {
     const meta = await readBundleMeta(bundle.name, env, states, metaCache)
+    const expectedVersion = expectedSpecVersion(bundle.name, bundle.spec)
+    const installedVersions = {}
+    for (const profile of knownProfiles) {
+      const version = stateVersionOf(states.get(profile), bundle.name)
+      if (version !== null) installedVersions[profile] = version
+    }
     const status = {}
     for (const profile of knownProfiles) {
       const state = states.get(profile)
       if (!state?.present) status[profile] = 'unknown'
       else if (!isInScope(bundle, profile, knownProfiles)) status[profile] = 'out-of-scope'
       else if (!state.installed.has(bundle.name)) status[profile] = 'missing'
-      else status[profile] = state.bundles.includes(bundle.name) ? 'in-sync' : 'drift'
+      else if (!state.bundles.includes(bundle.name)) status[profile] = 'drift'
+      else if (
+        expectedVersion !== null &&
+        installedVersions[profile] !== undefined &&
+        installedVersions[profile] !== expectedVersion
+      ) {
+        status[profile] = 'outdated'
+      } else status[profile] = 'in-sync'
     }
     items.push({
       key: `bundle:${bundle.name}`,
@@ -398,7 +420,13 @@ async function buildItemList(snapshot, env) {
       scope: resolveScope(bundle, knownProfiles),
       status,
       description: entryDescription(bundle) ?? meta.description,
-      details: { ...entryDetails('bundle', bundle), fullName: meta.fullName, version: meta.version },
+      details: {
+        ...entryDetails('bundle', bundle),
+        fullName: meta.fullName,
+        version: meta.version,
+        expectedVersion,
+        installedVersions,
+      },
     })
   }
 
@@ -444,6 +472,50 @@ async function buildItemList(snapshot, env) {
   return items
 }
 
+function buildUnmanagedList(snapshot) {
+  const managed = new Set((snapshot.manifest?.bundles ?? []).map((bundle) => bundle.name))
+  const byName = new Map()
+  for (const profile of snapshot.knownProfiles) {
+    const state = snapshot.states.get(profile)
+    if (!state?.present) continue
+    for (const name of state.bundles ?? []) {
+      if (typeof name !== 'string' || name === '' || managed.has(name)) continue
+      const entry = byName.get(name) ?? {
+        name,
+        profiles: [],
+        version: stateVersionOf(state, name),
+        core: state.sources?.get(name) === 'installation',
+      }
+      if (!entry.profiles.includes(profile)) entry.profiles.push(profile)
+      if (entry.version === null) entry.version = stateVersionOf(state, name)
+      if (state.sources?.get(name) === 'installation') entry.core = true
+      byName.set(name, entry)
+    }
+  }
+  return [...byName.values()]
+    .map((entry) => ({
+      ...entry,
+      profiles: [...entry.profiles].sort(),
+      spec: entry.core || entry.version === null ? entry.name : `${entry.name}@${entry.version}`,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function buildBackupList(snapshot) {
+  const backups = []
+  for (const profile of snapshot.knownProfiles) {
+    const state = snapshot.states.get(profile)
+    if (!state?.present || typeof state.dir !== 'string') continue
+    try {
+      const entries = listProfileBackups(state.dir)
+      if (entries.length > 0) backups.push({ profile, count: entries.length, latest: entries[0].stamp })
+    } catch {
+      // A profile whose directory cannot be read has nothing to restore here.
+    }
+  }
+  return backups
+}
+
 function buildProfileList(snapshot) {
   const { knownProfiles, states, plan } = snapshot
   const changesByProfile = new Map()
@@ -479,6 +551,8 @@ async function statusPayload(ctx, env, snapshotArg) {
     manifestErrors: snapshot.manifestErrors,
     profiles: buildProfileList(snapshot),
     items: await buildItemList(snapshot, env),
+    unmanaged: buildUnmanagedList(snapshot),
+    backups: buildBackupList(snapshot),
     lock: await readLockStatus(env),
     lastApplied: snapshot.lastApplied,
     currentProfile: env.currentProfile,
@@ -713,6 +787,103 @@ async function scopeAction(ctx, env, { key, scope } = {}) {
   }
 }
 
+async function adoptAction(ctx, env, { name } = {}) {
+  if (typeof name !== 'string' || name.trim() === '') {
+    return { ok: false, errors: ['name is required, e.g. "@deepseek-ai/dsh-experimental-terminal-bundle"'] }
+  }
+  const lock = await acquireLock(env.home, { owner: `dsh-fleet:adopt:${env.currentProfile ?? 'unknown'}` })
+  if (!lock.ok) return { ok: false, errors: [`manifest is busy (owner: ${lock.owner ?? 'unknown'})`] }
+  try {
+    const loaded = await loadManifest(env)
+    if (loaded.manifest === null) return { ok: false, errors: loaded.errors }
+    const manifest = loaded.manifest
+    if (!Array.isArray(manifest.bundles)) manifest.bundles = []
+    if (manifest.bundles.some((bundle) => bundle?.name === name)) {
+      return { ok: false, errors: [`bundle is already managed: ${name}`] }
+    }
+    const knownProfiles = manifest.profiles
+    const states = await readStates(env, knownProfiles)
+    const profiles = []
+    let version = null
+    for (const profile of knownProfiles) {
+      const state = states.get(profile)
+      if (!state?.present) continue
+      if (!(state.bundles ?? []).includes(name)) continue
+      profiles.push(profile)
+      version = version ?? stateVersionOf(state, name)
+    }
+    if (profiles.length === 0) {
+      return { ok: false, errors: [`bundle is not selected in any present profile: ${name}`] }
+    }
+    const scope = profiles.length === knownProfiles.length ? ['all'] : profiles
+    manifest.bundles.push({
+      name,
+      spec: version === null ? name : `${name}@${version}`,
+      scope,
+    })
+    const errors = validateManifest(manifest, { knownProfiles })
+    if (errors.length > 0) return { ok: false, errors }
+    await saveManifest(env, manifest)
+    return { ok: true, adopted: { name, spec: version === null ? name : `${name}@${version}`, scope }, state: await statusPayload(ctx, env) }
+  } catch (error) {
+    return { ok: false, errors: [errorText(error)] }
+  } finally {
+    await lock.release()
+  }
+}
+
+async function restoreAction(ctx, env, { profiles, stamp } = {}) {
+  if (stamp !== undefined && typeof stamp !== 'string') {
+    return { ok: false, errors: ['stamp must be a string like "20261025-112020029"'] }
+  }
+  const lock = await acquireLock(env.home, { owner: `dsh-fleet:restore:${env.currentProfile ?? 'unknown'}` })
+  if (!lock.ok) return { ok: false, errors: [`manifest is busy (owner: ${lock.owner ?? 'unknown'})`] }
+  try {
+    const snapshot = await buildSnapshot(ctx, env)
+    const targets = targetProfiles(snapshot, profiles)
+    const restored = []
+    const errors = []
+    for (const profile of targets) {
+      const state = snapshot.states.get(profile)
+      if (!state?.present || typeof state.dir !== 'string') {
+        errors.push(`profile ${JSON.stringify(profile)}: state is unavailable`)
+        continue
+      }
+      const result = restoreProfileBackups(state.dir, stamp === undefined ? {} : { stamp })
+      for (const error of result.errors) errors.push(`${profile}: ${error}`)
+      if (result.restored.length > 0) {
+        restored.push({ profile, files: result.restored.map((entry) => entry.file), stamp: result.restored[0].stamp })
+      }
+    }
+    if (restored.length === 0 && errors.length === 0) {
+      return { ok: false, errors: ['no fleet backups to restore'] }
+    }
+    await rm(env.statePath, { force: true })
+    return { ok: errors.length === 0, restored, errors, state: await statusPayload(ctx, env) }
+  } catch (error) {
+    return { ok: false, errors: [errorText(error)] }
+  } finally {
+    await lock.release()
+  }
+}
+
+async function doctorAction(ctx, env) {
+  const snapshot = await buildSnapshot(ctx, env)
+  return doctorReport({
+    home: env.home,
+    manifestPath: env.manifestPath,
+    currentProfile: env.currentProfile,
+    knownProfiles: snapshot.knownProfiles,
+    states: snapshot.states,
+    manifestErrors: snapshot.manifestErrors,
+    plan: snapshot.plan,
+    backups: buildBackupList(snapshot),
+    unmanaged: buildUnmanagedList(snapshot),
+    lock: await readLockStatus(env),
+    capability: (profile) => capabilityFor({ currentProfile: env.currentProfile, targetProfile: profile }),
+  })
+}
+
 // ---------------------------------------------------------------------------
 // HTTP surface (browser page)
 // ---------------------------------------------------------------------------
@@ -865,6 +1036,9 @@ function makeRoutes(ctx, env) {
     makeRoute('exact', `${API_PREFIX}/apply`, 'POST', async (body) => applyAction(ctx, env, body), env),
     makeRoute('exact', `${API_PREFIX}/install`, 'POST', async (body) => installAction(ctx, env, body), env),
     makeRoute('exact', `${API_PREFIX}/scope`, 'POST', async (body) => scopeAction(ctx, env, body), env),
+    makeRoute('exact', `${API_PREFIX}/adopt`, 'POST', async (body) => adoptAction(ctx, env, body), env),
+    makeRoute('exact', `${API_PREFIX}/restore`, 'POST', async (body) => restoreAction(ctx, env, body), env),
+    makeRoute('exact', `${API_PREFIX}/doctor`, 'GET', async () => doctorAction(ctx, env), env),
   ]
 }
 
@@ -878,8 +1052,8 @@ const TOOL_PARAMETERS = {
   properties: {
     action: {
       type: 'string',
-      enum: ['status', 'plan', 'apply', 'scope', 'install'],
-      description: 'status reads the matrix; plan is a dry run; apply writes managed blocks and bundle selections (installs missing packages first); scope changes one entry\'s profile lock; install only installs missing packages.',
+      enum: ['status', 'plan', 'apply', 'scope', 'adopt', 'restore', 'doctor', 'install'],
+      description: 'status reads the matrix; plan is a dry run; apply writes managed blocks and bundle selections (installs missing packages first); scope changes one entry\'s profile lock; adopt adds a profile bundle to the manifest; restore rolls back fleet backups; doctor diagnoses the environment; install only installs missing packages.',
     },
     profiles: {
       type: 'array',
@@ -894,6 +1068,14 @@ const TOOL_PARAMETERS = {
       type: 'array',
       items: { type: 'string' },
       description: 'For action=scope: allowed profile names; the entry is disabled everywhere else.',
+    },
+    name: {
+      type: 'string',
+      description: 'For action=adopt: the bundle package name to add to the manifest with the profiles it is selected in.',
+    },
+    stamp: {
+      type: 'string',
+      description: 'For action=restore: restore backups carrying this timestamp instead of the newest ones.',
     },
     dryRun: {
       type: 'boolean',
@@ -931,6 +1113,15 @@ function makeTool(ctx, env) {
       }
       if (action === 'scope') {
         return scopeAction(ctx, env, { key: args?.key, scope: args?.scope })
+      }
+      if (action === 'adopt') {
+        return adoptAction(ctx, env, { name: args?.name })
+      }
+      if (action === 'restore') {
+        return restoreAction(ctx, env, { profiles: args?.profiles, stamp: args?.stamp })
+      }
+      if (action === 'doctor') {
+        return doctorAction(ctx, env)
       }
       if (action === 'install') {
         return installAction(ctx, env, { profiles: args?.profiles })
