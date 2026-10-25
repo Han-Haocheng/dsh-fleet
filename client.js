@@ -538,6 +538,9 @@ window.__ModuleLoader__.load({
           ),
         )
 
+        const ENTRY_COL_WIDTH = 320
+        const ACTIONS_COL_WIDTH = 88
+
         const headCell = {
           textAlign: 'left',
           padding: '7px 10px',
@@ -578,9 +581,38 @@ window.__ModuleLoader__.load({
             { key: entry.key, style: dirty ? { background: 'rgba(230, 160, 40, 0.07)' } : undefined },
             h(
               'td',
-              { style: { ...cell, minWidth: 220, maxWidth: 380 } },
-              h('div', { style: { fontWeight: 500, fontSize: 13 } }, entry.label),
-              entry.spec ? h('div', { style: { fontSize: 11, opacity: 0.55, marginTop: 1 } }, entry.spec) : null,
+              { style: { ...cell, width: ENTRY_COL_WIDTH, maxWidth: ENTRY_COL_WIDTH, overflow: 'hidden' } },
+              h(
+                'div',
+                {
+                  title: entry.label,
+                  style: {
+                    fontWeight: 500,
+                    fontSize: 13,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  },
+                },
+                entry.label,
+              ),
+              entry.spec
+                ? h(
+                    'div',
+                    {
+                      title: entry.spec,
+                      style: {
+                        fontSize: 11,
+                        opacity: 0.55,
+                        marginTop: 1,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      },
+                    },
+                    entry.spec,
+                  )
+                : null,
             ),
             profiles.map((profile) => {
               const status = entry.status?.[profile.name]
@@ -632,18 +664,26 @@ window.__ModuleLoader__.load({
                 { style: { ...cardStyle, marginTop: 10, padding: 0, overflowX: 'auto' } },
                 h(
                   'table',
-                  { style: { borderCollapse: 'collapse', width: '100%', fontSize: 13 } },
+                  {
+                    style: {
+                      borderCollapse: 'collapse',
+                      width: '100%',
+                      minWidth: 620,
+                      tableLayout: 'fixed',
+                      fontSize: 13,
+                    },
+                  },
                   h(
                     'thead',
                     null,
                     h(
                       'tr',
                       null,
-                      h('th', { style: headCell }, t('item')),
+                      h('th', { style: { ...headCell, width: ENTRY_COL_WIDTH } }, t('item')),
                       ...profiles.map((profile) =>
                         h('th', { key: profile.name, style: { ...headCell, textAlign: 'center' } }, profile.name),
                       ),
-                      h('th', { style: { ...headCell, textAlign: 'right' } }, t('actions')),
+                      h('th', { style: { ...headCell, width: ACTIONS_COL_WIDTH, textAlign: 'right' } }, t('actions')),
                     ),
                   ),
                   h('tbody', null, visible.flatMap((entry) => rowFor(entry))),
