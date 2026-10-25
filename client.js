@@ -44,6 +44,8 @@ window.__ModuleLoader__.load({
         scopeCellHint: '每列勾选框即该条目是否写入该 profile；改完点行尾「保存」。',
         emptyScope: '至少要保留一个 profile；要彻底停用请从清单删除该条目。',
         identifierLabel: '标识',
+        fullNameLabel: '全名',
+        versionLabel: '版本',
         specLabel: '安装 spec',
         providesLabel: '提供',
         pruneLabel: '卸载时清理依赖',
@@ -124,6 +126,8 @@ window.__ModuleLoader__.load({
         scopeCellHint: 'Each checkbox sets whether this entry is written to that profile; click Save in the row after editing.',
         emptyScope: 'Keep at least one profile; delete the entry from the manifest to disable it everywhere.',
         identifierLabel: 'Key',
+        fullNameLabel: 'Full name',
+        versionLabel: 'Version',
         specLabel: 'Spec',
         providesLabel: 'Provides',
         pruneLabel: 'Prune on uninstall',
@@ -381,7 +385,12 @@ window.__ModuleLoader__.load({
         const active = entries.filter((entry) => entry.kind === tabKind)
         const lowered = query.trim().toLowerCase()
         const visible = active.filter((entry) => {
-          if (lowered !== '' && !`${entry.label} ${entry.spec ?? ''}`.toLowerCase().includes(lowered)) return false
+          if (
+            lowered !== '' &&
+            !`${entry.title ?? ''} ${entry.label} ${entry.spec ?? ''}`.toLowerCase().includes(lowered)
+          ) {
+            return false
+          }
           if (!problemOnly) return true
           return profiles.some((profile) => PROBLEM.has(entry.status?.[profile.name]))
         })
@@ -620,8 +629,10 @@ window.__ModuleLoader__.load({
 
         function tipRows(entry) {
           const rows = [[t('identifierLabel'), entry.key]]
+          if (entry.title && entry.title !== entry.label) rows.push([t('fullNameLabel'), entry.label])
           if (entry.kind === 'bundle') {
             if (entry.spec) rows.push([t('specLabel'), entry.spec])
+            if (entry.details?.version) rows.push([t('versionLabel'), entry.details.version])
             const provides = entry.details?.provides
             if (Array.isArray(provides) && provides.length > 0) rows.push([t('providesLabel'), provides.join(', ')])
             if (entry.details?.prune === true) rows.push([t('pruneLabel'), 'true'])
@@ -658,6 +669,7 @@ window.__ModuleLoader__.load({
 
         function rowFor(entry) {
           const dirty = isDirty(entry)
+          const displayName = entry.title ?? entry.label
           return h(
             'tr',
             { key: entry.key, style: dirty ? { background: 'rgba(230, 160, 40, 0.07)' } : undefined },
@@ -679,7 +691,7 @@ window.__ModuleLoader__.load({
                     textOverflow: 'ellipsis',
                   },
                 },
-                entry.label,
+                displayName,
               ),
               entry.spec
                 ? h(
@@ -890,8 +902,16 @@ window.__ModuleLoader__.load({
                     color: 'inherit',
                   },
                 },
-                h('div', { style: { fontWeight: 600, fontSize: 13, wordBreak: 'break-all' } }, tipEntry.label),
-                h('div', { style: { opacity: 0.6, marginTop: 2 } }, t(KIND_LABEL[tipEntry.kind] ?? 'descItem')),
+                h(
+                  'div',
+                  { style: { fontWeight: 600, fontSize: 13, wordBreak: 'break-all' } },
+                  tipEntry.title ?? tipEntry.label,
+                ),
+                h(
+                  'div',
+                  { style: { opacity: 0.6, marginTop: 2 } },
+                  t(KIND_LABEL[tipEntry.kind] ?? 'descItem'),
+                ),
                 h(
                   'div',
                   { style: { marginTop: 6, opacity: 0.85, whiteSpace: 'pre-wrap' } },

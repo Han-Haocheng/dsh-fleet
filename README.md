@@ -50,6 +50,7 @@ bundles:
   - name: dsh-free-search
     spec: dsh-free-search@0.9.15    # 安装 spec；@deepseek-ai/* 用包名即可（随 DSH 提供）
     scope: [all]
+    title: '免费搜索'
     description: '免费搜索与抓取（DDG / fs-quality-fetch）'
     provides: [ddg, fs-quality-fetch]   # 供校验器检查配置引用
 
@@ -71,7 +72,8 @@ items:
 ```
 
 `config` 与 DSH patch 语义一致：**整段替换，不做深合并**。`overrides` 是唯一例外：与基座浅合并。
-`description` 是三个类型都支持的可选字段，只用于设置页的悬浮说明，不参与渲染与校验（但必须是字符串）。
+`title` 与 `description` 是三个类型都支持的可选字段，只用于设置页展示（行内显示 title，悬浮卡显示 description），不参与渲染；两者都必须是字符串。
+`title` 会覆盖插件包自带的中文名（`locale/zh.json` 的 `meta.title`），没有 title 时回退到包名。
 
 ## 安装到各 profile
 
@@ -108,7 +110,9 @@ Settings → **多 Profile 管理**：
 - 主体按 **插件包 / 模型接入 / 配置行** 三个页签分开，不再混在一张长表里，页签上带条目数；
 - 每个页签内支持按名称/标识搜索、勾选“只看问题”，表格按 profile 列展示状态；
 - 每列勾选框直接切换该条目是否写入该 profile，改完行尾才出现「保存」；有问题的单元格显示 ⚠️，悬浮查看原因；
-- 鼠标悬浮**条目名称**显示详情卡：类型、标识、安装 spec、provider / 配置要点、范围与各 profile 当前状态；在清单里给条目写 `description` 可自定义说明文字；
+- 条目显示插件的中文名（读取包的 `locale/zh.json` 中 `meta.title`，没有则回退到包名）；
+- 鼠标悬浮**条目名称**显示详情卡：全名、版本、描述、安装 spec、provider / 配置要点、范围与各 profile 当前状态；
+- 描述优先级：清单条目的 `description` > 包的 `locale/zh.json` `meta.description` > 包的 `package.json` `description`；
 - “预览变更 / 应用”在底部给出待应用清单、待安装包、备份与需重启提示。
 
 ### Agent 工具（三个 profile 都可用，TUI 也适用）

@@ -38,6 +38,7 @@ import {
   writeManifestFile,
   atomicWriteFile,
   acquireLock,
+  resolveBundleDir,
 } from './lib/profile.js'
 import { buildPlan, applyPlan } from './lib/plan.js'
 import { capabilityFor, installInCurrentProfile, installViaCli } from './lib/install.js'
@@ -275,6 +276,65 @@ function providerEntryStatus(state, manifest, provider, profile, knownProfiles) 
   return sameValue(providers[provider.key], effectiveConfig(provider, profile)) ? 'in-sync' : 'drift'
 }
 
+/** Locale files a package may ship for its Chinese display name / description. */
+const BUNDLE_LOCALE_PATHS = [
+  'locale/zh.json',
+  'locales/zh.json',
+  'locale/zh-CN.json',
+  'locales/zh-CN.json',
+  'i18n/zh.json',
+]
+
+async function readJsonIfPresent(path) {
+  try {
+    return JSON.parse(await readFile(path, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+function shortenText(value, limit = 320) {
+  if (typeof value !== 'string') return null
+  const text = value.trim()
+  if (text === '') return null
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text
+}
+
+function bundleDirectory(name, env, states) {
+  for (const state of states.values()) {
+    const dir = resolveBundleDir(name, state?.dir, env.installAnchor)
+    if (dir !== null) return dir
+  }
+  return null
+}
+
+/** Read the package's Chinese title/description plus its version once per status call. */
+async function readBundleMeta(name, env, states, cache) {
+  const cached = cache.get(name)
+  if (cached !== undefined) return cached
+  const meta = { title: null, description: null, version: null, fullName: name }
+  const dir = bundleDirectory(name, env, states)
+  if (dir !== null) {
+    const pkg = await readJsonIfPresent(join(dir, 'package.json'))
+    if (pkg !== null) {
+      if (typeof pkg.name === 'string' && pkg.name !== '') meta.fullName = pkg.name
+      if (typeof pkg.version === 'string') meta.version = pkg.version
+      if (typeof pkg.displayName === 'string' && pkg.displayName.trim() !== '') meta.title = pkg.displayName
+      meta.description = shortenText(pkg.description)
+    }
+    for (const relative of BUNDLE_LOCALE_PATHS) {
+      const locale = await readJsonIfPresent(join(dir, relative))
+      const info = locale?.meta
+      if (info === undefined || info === null || typeof info !== 'object') continue
+      if (typeof info.title === 'string' && info.title.trim() !== '') meta.title = info.title
+      if (typeof info.description === 'string') meta.description = shortenText(info.description)
+      break
+    }
+  }
+  cache.set(name, meta)
+  return meta
+}
+
 /** Optional manifest description, surfaced by the settings page hover card. */
 function entryDescription(entry) {
   return typeof entry?.description === 'string' ? entry.description : undefined
@@ -307,7 +367,7 @@ function entryDetails(kind, entry) {
   }
 }
 
-function buildItemList(snapshot) {
+async function buildItemList(snapshot, env) {
   const { manifest, knownProfiles, states } = snapshot
   if (!manifest) return []
   const expectedByProfile = new Map()
@@ -317,8 +377,10 @@ function buildItemList(snapshot) {
     currentByProfile.set(profile, currentBlockEntries(states.get(profile)))
   }
   const items = []
+  const metaCache = new Map()
 
   for (const bundle of manifest.bundles) {
+    const meta = await readBundleMeta(bundle.name, env, states, metaCache)
     const status = {}
     for (const profile of knownProfiles) {
       const state = states.get(profile)
@@ -331,11 +393,12 @@ function buildItemList(snapshot) {
       key: `bundle:${bundle.name}`,
       kind: 'bundle',
       label: bundle.name,
+      title: typeof bundle.title === 'string' && bundle.title !== '' ? bundle.title : meta.title,
       spec: bundle.spec,
       scope: resolveScope(bundle, knownProfiles),
       status,
-      description: entryDescription(bundle),
-      details: entryDetails('bundle', bundle),
+      description: entryDescription(bundle) ?? meta.description,
+      details: { ...entryDetails('bundle', bundle), fullName: meta.fullName, version: meta.version },
     })
   }
 
@@ -348,6 +411,7 @@ function buildItemList(snapshot) {
       key: `provider:${provider.key}`,
       kind: 'provider',
       label: provider.key,
+      title: typeof provider.title === 'string' && provider.title !== '' ? provider.title : undefined,
       spec: provider.config?.displayName ?? provider.key,
       scope: resolveScope(provider, knownProfiles),
       status,
@@ -369,6 +433,7 @@ function buildItemList(snapshot) {
       key: `item:${item.id}`,
       kind: 'item',
       label: item.id,
+      title: typeof item.title === 'string' && item.title !== '' ? item.title : undefined,
       spec: item.name ?? '',
       scope: resolveScope(item, knownProfiles),
       status,
@@ -413,7 +478,7 @@ async function statusPayload(ctx, env, snapshotArg) {
     manifestPath: env.manifestPath,
     manifestErrors: snapshot.manifestErrors,
     profiles: buildProfileList(snapshot),
-    items: buildItemList(snapshot),
+    items: await buildItemList(snapshot, env),
     lock: await readLockStatus(env),
     lastApplied: snapshot.lastApplied,
     currentProfile: env.currentProfile,

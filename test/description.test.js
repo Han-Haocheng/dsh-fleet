@@ -13,18 +13,22 @@ items:
     name: "@deepseek-ai/dsh-web"
     scope:
       - web
+    title: "Web 配置"
     description: "web 搜索与抓取配置"
     config:
       searchProvider: ddg
 `
 
-test('entries keep an optional description through parse and serialize', () => {
+test('entries keep an optional title/description through parse and serialize', () => {
   const { manifest, errors, warnings } = parseManifest(TEXT)
   assert.deepEqual(errors, [])
   assert.deepEqual(warnings, [])
+  assert.equal(manifest.items[0].title, 'Web 配置')
   assert.equal(manifest.items[0].description, 'web 搜索与抓取配置')
   assert.deepEqual(validateManifest(manifest, { knownProfiles: ['web'] }), [])
-  assert.match(serializeManifest(manifest), /description: web 搜索与抓取配置/)
+  const out = serializeManifest(manifest)
+  assert.match(out, /title: Web 配置/)
+  assert.match(out, /description: web 搜索与抓取配置/)
 })
 
 test('a non-string description is rejected', () => {
@@ -32,4 +36,11 @@ test('a non-string description is rejected', () => {
   const { manifest } = parseManifest(bad)
   const errors = validateManifest(manifest, { knownProfiles: ['web'] })
   assert.ok(errors.some((error) => error.includes('.description: must be a string')))
+})
+
+test('a non-string title is rejected', () => {
+  const bad = TEXT.replace('"Web 配置"', '7')
+  const { manifest } = parseManifest(bad)
+  const errors = validateManifest(manifest, { knownProfiles: ['web'] })
+  assert.ok(errors.some((error) => error.includes('.title: must be a string')))
 })
