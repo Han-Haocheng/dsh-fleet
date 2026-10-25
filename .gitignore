@@ -2,3 +2,4 @@ node_modules/
 *.tgz
 *.bak-fleet-*
 .DS_Store
+.dsh-ops/
