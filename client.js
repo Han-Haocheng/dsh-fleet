@@ -36,6 +36,18 @@ window.__ModuleLoader__.load({
         item: '条目',
         scope: '范围',
         saveScope: '保存范围',
+        actions: '操作',
+        save: '保存',
+        saved: '范围已保存；点「应用」写入对应 profile。',
+        inScope: '在范围内',
+        notInScope: '不在范围',
+        scopeCellHint: '每列勾选框即该条目是否写入该 profile；改完点行尾「保存」。',
+        emptyScope: '至少要保留一个 profile；要彻底停用请从清单删除该条目。',
+        detailDrift: '与清单不一致：点「应用」按清单重写；或取消勾选，保留该 profile 的本地配置。',
+        detailMissing: '该包尚未安装：点「应用」会先安装再选中。',
+        detailUnknown: '读不到该 profile 的状态（目录不存在或读取失败）；先启动一次该 profile。',
+        detailError: '状态读取出错：查看清单错误或 fleet.reject.log。',
+        providerCarrier: 'provider 通过 llm-pi-ai 行落地；该行不在这个 profile 的范围，所以保留本地 provider 配置。',
         cancel: '取消',
         editScope: '改范围',
         changes: '待应用的变更',
@@ -89,6 +101,18 @@ window.__ModuleLoader__.load({
         item: 'Entry',
         scope: 'Scope',
         saveScope: 'Save',
+        actions: 'Actions',
+        save: 'Save',
+        saved: 'Scope saved; click Apply to write it to the profiles.',
+        inScope: 'in scope',
+        notInScope: 'not in scope',
+        scopeCellHint: 'Each checkbox sets whether this entry is written to that profile; click Save in the row after editing.',
+        emptyScope: 'Keep at least one profile; delete the entry from the manifest to disable it everywhere.',
+        detailDrift: 'Differs from the manifest: click Apply to rewrite it, or uncheck to keep this profile\'s local config.',
+        detailMissing: 'Not installed yet: Apply installs it before selecting the bundle.',
+        detailUnknown: 'Profile state is unreadable (missing directory or read failure); start that profile once.',
+        detailError: 'Status read failed: check manifest errors or fleet.reject.log.',
+        providerCarrier: 'Providers land through the llm-pi-ai row; that row is out of scope here, so the local provider config is kept.',
         cancel: 'Cancel',
         editScope: 'Edit scope',
         changes: 'Pending changes',
@@ -136,7 +160,7 @@ window.__ModuleLoader__.load({
       pending: 'pending',
     }
 
-    const PROBLEM = new Set(['drift', 'missing', 'error'])
+    const PROBLEM = new Set(['drift', 'missing', 'unknown', 'error'])
 
     async function request(path, init) {
       const response = await fetch(API + path, {
@@ -186,8 +210,7 @@ window.__ModuleLoader__.load({
         const [problemOnly, setProblemOnly] = useState(false)
         const [plan, setPlan] = useState(null)
         const [applyResult, setApplyResult] = useState(null)
-        const [editing, setEditing] = useState(null)
-        const [scopeDraft, setScopeDraft] = useState(null)
+        const [drafts, setDrafts] = useState({})
         const [toast, setToast] = useState(null)
 
         const load = useCallback(async () => {
@@ -249,37 +272,51 @@ window.__ModuleLoader__.load({
           }
         }, [load])
 
-        const startEdit = useCallback(
-          (entry) => {
-            setEditing(entry.key)
-            const draft = {}
-            for (const profile of profiles) draft[profile.name] = entry.scope.includes(profile.name)
-            setScopeDraft(draft)
-          },
-          [profiles],
-        )
+        // The host stores the all-profiles case as ['all'].
+        const expandedScope = (entry) =>
+          entry.scope.includes('all') ? profiles.map((profile) => profile.name) : entry.scope
 
-        const cancelEdit = useCallback(() => {
-          setEditing(null)
-          setScopeDraft(null)
-        }, [])
+        const scopeOf = (entry) => drafts[entry.key] ?? expandedScope(entry)
 
-        const saveScope = useCallback(async () => {
-          if (!editing || !scopeDraft) return
-          const scope = Object.entries(scopeDraft)
-            .filter(([, enabled]) => enabled)
-            .map(([name]) => name)
-          setBusy(`scope:${editing}`)
+        const toggleScope = (entry, profileName) => {
+          setDrafts((current) => {
+            const base = current[entry.key] ?? expandedScope(entry)
+            const next = base.includes(profileName)
+              ? base.filter((name) => name !== profileName)
+              : [...base, profileName]
+            const ordered = profiles.map((profile) => profile.name).filter((name) => next.includes(name))
+            return { ...current, [entry.key]: ordered }
+          })
+        }
+
+        const isDirty = (entry) => {
+          const draft = drafts[entry.key]
+          if (draft === undefined) return false
+          const base = expandedScope(entry)
+          return draft.length !== base.length || draft.some((name) => !base.includes(name))
+        }
+
+        const saveRowScope = async (entry) => {
+          const scope = drafts[entry.key] ?? expandedScope(entry)
+          if (scope.length === 0) {
+            setToast({ kind: 'error', text: t('emptyScope') })
+            return
+          }
+          setBusy(`scope:${entry.key}`)
           try {
             const payload = await request('/scope', {
               method: 'POST',
-              body: JSON.stringify({ key: editing, scope }),
+              body: JSON.stringify({ key: entry.key, scope }),
             })
             if (payload.ok) {
-              setEditing(null)
-              setScopeDraft(null)
+              setDrafts((current) => {
+                const next = { ...current }
+                delete next[entry.key]
+                return next
+              })
               if (payload.state) setState(payload.state)
               else await load()
+              setToast({ kind: 'ok', text: t('saved') })
             } else {
               setToast({ kind: 'error', text: (payload.errors ?? []).join('\n') || t('scopeFailed') })
             }
@@ -288,7 +325,7 @@ window.__ModuleLoader__.load({
           } finally {
             setBusy(null)
           }
-        }, [editing, scopeDraft, load])
+        }
 
         const kindEntries = (kind) => entries.filter((entry) => entry.kind === kind)
         const counts = {
@@ -511,86 +548,76 @@ window.__ModuleLoader__.load({
           borderBottom: '1px solid var(--dsw-alias-border-1, rgba(127,127,127,0.18))',
         }
         const cell = { padding: '8px 10px', verticalAlign: 'top' }
-        const smallButton = (onClick, label) =>
+        const smallButton = (onClick, label, disabled = false) =>
           h(
             'button',
             {
               onClick,
-              style: { ...buttonStyle(false), padding: '2px 8px', fontSize: 12, whiteSpace: 'nowrap' },
+              disabled,
+              style: { ...buttonStyle(disabled), padding: '2px 8px', fontSize: 12, whiteSpace: 'nowrap' },
             },
             label,
           )
 
+        function scopeDetail(entry, profileName, status) {
+          if (status === 'missing') return t('detailMissing')
+          if (status === 'drift') return t('detailDrift')
+          if (status === 'unknown') return t('detailUnknown')
+          if (status === 'error') return t('detailError')
+          if (entry.kind === 'provider') {
+            const carrier = entries.find((item) => item.key === 'item:llm-pi-ai')
+            if (carrier && !expandedScope(carrier).includes(profileName)) return t('providerCarrier')
+          }
+          return t('notInScope')
+        }
+
         function rowFor(entry) {
-          const editingThis = editing === entry.key
-          const main = h(
+          const dirty = isDirty(entry)
+          return h(
             'tr',
-            { key: entry.key },
+            { key: entry.key, style: dirty ? { background: 'rgba(230, 160, 40, 0.07)' } : undefined },
             h(
               'td',
               { style: { ...cell, minWidth: 220, maxWidth: 380 } },
               h('div', { style: { fontWeight: 500, fontSize: 13 } }, entry.label),
               entry.spec ? h('div', { style: { fontSize: 11, opacity: 0.55, marginTop: 1 } }, entry.spec) : null,
             ),
-            profiles.map((profile) =>
-              h(
+            profiles.map((profile) => {
+              const status = entry.status?.[profile.name]
+              const problem = PROBLEM.has(status)
+              const checked = scopeOf(entry).includes(profile.name)
+              const detail = problem ? scopeDetail(entry, profile.name, status) : checked ? t('inSync') : t('notInScope')
+              return h(
                 'td',
                 { key: profile.name, style: { ...cell, textAlign: 'center', whiteSpace: 'nowrap' } },
-                chip(t, entry.status?.[profile.name]),
-              ),
-            ),
+                h(
+                  'span',
+                  { title: `${checked ? t('inScope') : t('notInScope')} — ${detail}`, style: { display: 'inline-flex', alignItems: 'center', gap: 4 } },
+                  h(
+                    'label',
+                    { style: { display: 'inline-flex', alignItems: 'center', cursor: 'pointer' } },
+                    h('input', {
+                      type: 'checkbox',
+                      checked,
+                      onChange: () => toggleScope(entry, profile.name),
+                      'aria-label': `${entry.label} @ ${profile.name}`,
+                      style: { margin: 0, cursor: 'pointer' },
+                    }),
+                  ),
+                  problem
+                    ? h('span', { title: detail, style: { cursor: 'help', fontSize: 13, lineHeight: '16px' } }, '⚠️')
+                    : null,
+                ),
+              )
+            }),
             h(
               'td',
               { style: { ...cell, whiteSpace: 'nowrap', textAlign: 'right' } },
-              h(
-                'span',
-                { style: { fontSize: 12, opacity: 0.7, marginRight: 8 } },
-                entry.scope.length === profiles.length ? t('all') : entry.scope.join(', '),
-              ),
-              smallButton(() => (editingThis ? cancelEdit() : startEdit(entry)), editingThis ? t('cancel') : t('editScope')),
+              dirty
+                ? smallButton(() => saveRowScope(entry), busy === `scope:${entry.key}` ? '…' : t('save'), Boolean(busy))
+                : null,
             ),
           )
-          if (!editingThis) return main
-          const editor = h(
-            'tr',
-            { key: `${entry.key}:scope` },
-            h(
-              'td',
-              {
-                colSpan: profiles.length + 2,
-                style: {
-                  padding: '10px 12px',
-                  background: 'var(--dsw-alias-bg-layer-1, rgba(127,127,127,0.045))',
-                  borderBottom: '1px solid var(--dsw-alias-border-1, rgba(127,127,127,0.12))',
-                },
-              },
-              h('div', { style: { fontSize: 12, opacity: 0.72, marginBottom: 8 } }, t('scopeEditorHint')),
-              h(
-                'div',
-                { style: { display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' } },
-                ...profiles.map((profile) =>
-                  h(
-                    'label',
-                    { key: profile.name, style: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13 } },
-                    h('input', {
-                      type: 'checkbox',
-                      checked: Boolean(scopeDraft?.[profile.name]),
-                      onChange: () =>
-                        setScopeDraft((draft) => ({ ...(draft ?? {}), [profile.name]: !draft?.[profile.name] })),
-                    }),
-                    profile.name,
-                    chip(t, entry.status?.[profile.name]),
-                  ),
-                ),
-                h(
-                  'button',
-                  { style: buttonStyle(Boolean(busy)), disabled: Boolean(busy), onClick: saveScope },
-                  busy === `scope:${entry.key}` ? '…' : t('saveScope'),
-                ),
-              ),
-            ),
-          )
-          return [main, editor]
         }
 
         const table =
@@ -616,7 +643,7 @@ window.__ModuleLoader__.load({
                       ...profiles.map((profile) =>
                         h('th', { key: profile.name, style: { ...headCell, textAlign: 'center' } }, profile.name),
                       ),
-                      h('th', { style: { ...headCell, textAlign: 'right' } }, t('scope')),
+                      h('th', { style: { ...headCell, textAlign: 'right' } }, t('actions')),
                     ),
                   ),
                   h('tbody', null, visible.flatMap((entry) => rowFor(entry))),
@@ -740,7 +767,7 @@ window.__ModuleLoader__.load({
           table,
           planBlock,
           resultBlock,
-          h('div', { style: { marginTop: 12, fontSize: 11, opacity: 0.55 } }, t('outOfScopeHint')),
+          h('div', { style: { marginTop: 12, fontSize: 11, opacity: 0.55 } }, `${t('scopeCellHint')} ${t('outOfScopeHint')}`),
         )
       }
     }
