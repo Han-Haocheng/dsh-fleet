@@ -46,6 +46,7 @@ import { listProfileBackups, restoreProfileBackups } from './lib/restore.js'
 import { doctorReport } from './lib/doctor.js'
 import { capabilityFor, installInCurrentProfile, installViaCli } from './lib/install.js'
 import { stripUndefinedJson } from './lib/util.js'
+import { driftBadge, summarizeDrift } from './lib/drift.js'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-fleet'
@@ -61,6 +62,7 @@ const DEFAULTS = {
   manifestPath: 'fleet.yml',
   dshCommand: 'dsh',
   autoInstall: true,
+  notifyOnDrift: true,
 }
 
 /**
@@ -95,6 +97,11 @@ export const Config = z.object({
     .boolean()
     .default(DEFAULTS.autoInstall)
     .description('Install missing packages before writing config.')
+    .volatile(),
+  notifyOnDrift: z
+    .boolean()
+    .default(DEFAULTS.notifyOnDrift)
+    .description('On startup, report a manifest that differs from the profile (never writes).')
     .volatile(),
 })
 
@@ -611,6 +618,7 @@ async function statusPayload(ctx, env, snapshotArg) {
       errors: snapshot.plan.errors,
       pendingInstalls: snapshot.plan.pendingInstalls,
     },
+    drift: summarizeDrift(snapshot.plan, env.currentProfile),
   }
 }
 
@@ -767,6 +775,11 @@ async function applyAction(ctx, env, { profiles, dryRun = false } = {}) {
       // The state file is informational; a write failure must not fail the apply.
     }
 
+    try {
+      ctx.emit?.('dsh-fleet/applied', { profile: env.currentProfile ?? null, changes: plan.changes.length })
+    } catch {
+      // A listener must never turn a completed apply into a failure.
+    }
     return {
       ok: true,
       applied: plan.changes,
@@ -1220,6 +1233,14 @@ const TUI_SETTINGS_FIELDS = Object.freeze([
     kind: 'boolean',
   },
   {
+    path: Object.freeze(['notifyOnDrift']),
+    label: 'Drift notice',
+    descriptions: Object.freeze({ zh: '待应用提醒' }),
+    hint: 'Report a manifest that differs from this profile on startup. Never writes.',
+    hintDescriptions: Object.freeze({ zh: '启动时做一次只读检查，清单与本 profile 不一致就在状态栏提示，不会写文件。' }),
+    kind: 'boolean',
+  },
+  {
     path: Object.freeze(['dshCommand']),
     label: 'dsh command',
     descriptions: Object.freeze({ zh: 'dsh 命令' }),
@@ -1310,4 +1331,72 @@ export function apply(ctx, config) {
       'dsh-fleet: settings presentation',
     )
   })
+
+  // Startup drift notice: a manifest edit only reaches a profile through
+  // `apply`, and there is no watcher. Report the gap instead of writing it.
+  let tuiStatus
+  ctx.inject(['tuiStatus'], (statusContext) => {
+    tuiStatus = statusContext.tuiStatus
+  })
+
+  let driftTimer
+  let driftSeq = 0
+  const setDriftBadge = (drift) => {
+    if (tuiStatus === undefined) return
+    try {
+      const text = driftBadge(drift)
+      if (text === undefined) {
+        tuiStatus.setField('fleet', undefined)
+        return
+      }
+      tuiStatus.setField('fleet', text, {
+        slot: 'right-head',
+        tone: 'warning',
+        maxCells: 24,
+        detail: '清单与当前 profile 不一致：运行 fleet(action="apply") 同步',
+      })
+    } catch {
+      // The footer is decoration; a refusal must not affect the plugin.
+    }
+  }
+
+  const refreshDrift = async () => {
+    if (configValue(config?.notifyOnDrift) === false) return
+    const seq = ++driftSeq
+    try {
+      const env = getEnv()
+      const snapshot = await buildSnapshot(ctx, env)
+      if (seq !== driftSeq) return
+      const drift = summarizeDrift(snapshot.plan, env.currentProfile)
+      if (drift.pending > 0) {
+        ctx.logger?.warn?.(
+          `dsh-fleet: 清单有 ${drift.pending} 项待应用（profile: ${env.currentProfile ?? 'unknown'}），运行 fleet(action="apply") 同步`,
+        )
+      }
+      setDriftBadge(drift)
+    } catch {
+      // Doctor/plan already surface a broken manifest; a boot check must not.
+    }
+  }
+
+  const driftDelay = Number(process.env.DSH_FLEET_DRIFT_DELAY_MS ?? '')
+  const scheduleDriftCheck = (delay = Number.isFinite(driftDelay) && driftDelay >= 0 ? driftDelay : 1500) => {
+    if (driftTimer !== undefined) clearTimeout(driftTimer)
+    driftTimer = setTimeout(() => {
+      driftTimer = undefined
+      void refreshDrift()
+    }, delay)
+    driftTimer.unref?.()
+  }
+
+  if (configValue(config?.notifyOnDrift) !== false) scheduleDriftCheck()
+  ctx.effect(
+    () => () => {
+      if (driftTimer !== undefined) clearTimeout(driftTimer)
+    },
+    'dsh-fleet: drift check timer',
+  )
+  // A successful apply makes the badge stale immediately; re-check instead of
+  // waiting for the next boot.
+  ctx.on('dsh-fleet/applied', () => scheduleDriftCheck(200))
 }
