@@ -18,4 +18,9 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: node --check index.js
       - run: node --check client.js
-      - run: node --test test/
+      # Pass the files, not the directory. Node 20 expands `test/` (and also
+      # picks up test/helpers.js, since it counts every file under a `test`
+      # directory), while Node 22 treats the directory as a module to import
+      # and fails with "Cannot find module .../test". The shell glob is the
+      # only form that behaves the same on both.
+      - run: node --test test/*.test.js
