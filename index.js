@@ -44,6 +44,7 @@ import { buildPlan, applyPlan, expectedSpecVersion } from './lib/plan.js'
 import { listProfileBackups, restoreProfileBackups } from './lib/restore.js'
 import { doctorReport } from './lib/doctor.js'
 import { capabilityFor, installInCurrentProfile, installViaCli } from './lib/install.js'
+import { stripUndefinedJson } from './lib/util.js'
 
 export const name = 'dsh-fleet'
 
@@ -1097,38 +1098,50 @@ function makeTool(ctx, env) {
       'Manage this machine\'s DSH profiles from one manifest (~/.dsh/fleet.yml): which bundles, model providers and config rows belong to which profile, with scope locking. Use status first, then plan (dry run), then apply. Desktop package installs can only run from inside the desktop profile; other profiles install through the official dsh CLI.',
     parameters: TOOL_PARAMETERS,
     output: TOOL_OUTPUT,
-    execute: async (args) => {
-      const action = args?.action
-      if (action === 'status') {
-        return statusPayload(ctx, env)
-      }
-      if (action === 'plan') {
-        const snapshot = await buildSnapshot(ctx, env)
-        const targets = targetProfiles(snapshot, args?.profiles)
-        const plan = filterPlan(snapshot.plan, targets)
-        return { ok: plan.errors.length === 0, targets, ...plan, manifestErrors: snapshot.manifestErrors }
-      }
-      if (action === 'apply') {
-        return applyAction(ctx, env, { profiles: args?.profiles, dryRun: args?.dryRun === true })
-      }
-      if (action === 'scope') {
-        return scopeAction(ctx, env, { key: args?.key, scope: args?.scope })
-      }
-      if (action === 'adopt') {
-        return adoptAction(ctx, env, { name: args?.name })
-      }
-      if (action === 'restore') {
-        return restoreAction(ctx, env, { profiles: args?.profiles, stamp: args?.stamp })
-      }
-      if (action === 'doctor') {
-        return doctorAction(ctx, env)
-      }
-      if (action === 'install') {
-        return installAction(ctx, env, { profiles: args?.profiles })
-      }
-      return { ok: false, errors: [`unknown action: ${String(action)}`] }
-    },
+    // The Harness snapshots every tool result as lossless JSON and rejects a
+    // single `undefined` property, so the action's raw object is cleaned here
+    // rather than at its many construction sites (several deliberately emit
+    // `undefined` for "absent", e.g. entryDetails' provides/prune).
+    execute: async (args) => stripUndefinedJson(await executeFleetAction(ctx, env, args)),
   }
+}
+
+/**
+ * Run one `fleet` action and return its raw payload. Action bodies may leave
+ * `undefined` in place — `makeTool` strips it at the tool boundary — and the
+ * same payload shapes are reused by the HTTP routes, where JSON.stringify
+ * already drops such keys.
+ */
+async function executeFleetAction(ctx, env, args) {
+  const action = args?.action
+  if (action === 'status') {
+    return statusPayload(ctx, env)
+  }
+  if (action === 'plan') {
+    const snapshot = await buildSnapshot(ctx, env)
+    const targets = targetProfiles(snapshot, args?.profiles)
+    const plan = filterPlan(snapshot.plan, targets)
+    return { ok: plan.errors.length === 0, targets, ...plan, manifestErrors: snapshot.manifestErrors }
+  }
+  if (action === 'apply') {
+    return applyAction(ctx, env, { profiles: args?.profiles, dryRun: args?.dryRun === true })
+  }
+  if (action === 'scope') {
+    return scopeAction(ctx, env, { key: args?.key, scope: args?.scope })
+  }
+  if (action === 'adopt') {
+    return adoptAction(ctx, env, { name: args?.name })
+  }
+  if (action === 'restore') {
+    return restoreAction(ctx, env, { profiles: args?.profiles, stamp: args?.stamp })
+  }
+  if (action === 'doctor') {
+    return doctorAction(ctx, env)
+  }
+  if (action === 'install') {
+    return installAction(ctx, env, { profiles: args?.profiles })
+  }
+  return { ok: false, errors: [`unknown action: ${String(action)}`] }
 }
 
 // ---------------------------------------------------------------------------
