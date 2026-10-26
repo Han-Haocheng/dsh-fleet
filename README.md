@@ -75,6 +75,11 @@ items:
 ```
 
 `config` 与 DSH patch 语义一致：**整段替换，不做深合并**。`overrides` 是唯一例外：与基座浅合并。
+
+provider 的模型条目有**按模型 id 的元数据继承**：清单里只写 `id` / `name` 时，渲染会用该 profile
+自己 `llm-pi-ai` 行里同一模型的 `reasoningEfforts`、`contextWindow`、`maxTokens`、`input`、`output`
+补全（清单显式写的值优先）。这样清单只当“选哪些模型”，不必复述模型能力；删掉字段不会把已有能力抹掉，
+要显式关闭推理强度就写 `reasoningEfforts: false`。补全用的是**受管块之外**的行，所以不会把自己上一轮的输出当来源。
 `title` 与 `description` 是三个类型都支持的可选字段，只用于设置页展示（行内显示 title，悬浮卡显示 description），不参与渲染；两者都必须是字符串。
 `title` 会覆盖插件包自带的中文名（`locale/zh.json` 的 `meta.title`），没有 title 时回退到包名。
 
@@ -134,6 +139,24 @@ fleet(action="restore")                         # 回滚到最近一次 apply �
 fleet(action="doctor")                          # 环境诊断
 fleet(action="install")                         # 只补装缺包
 ```
+
+### TUI（`dsh-tui` 的 `/settings`）
+
+`/settings` 里有一个 **「多 Profile 管理」** 页签，可改三个行配置项：
+
+| 字段 | 含义 |
+|---|---|
+| 清单路径 | `fleet.yml` 的位置；`~` 指 DSH home，相对路径按它解析 |
+| 自动安装缺失插件 | `apply` 前是否先补装缺包 |
+| dsh 命令 | 向其它 CLI profile 安装时用的 `dsh` 可执行文件 |
+
+改动即保存（写进该 profile 的 `cordis.patch.yml`，插件随即重启生效）。矩阵本身仍在 `fleet.yml` 里：
+TUI 设置屏只支持 text / number / boolean / select 四种控件，装不下整张矩阵，**它不是 fleet 设置页的等价物**。
+看矩阵、批量改 scope、预览/应用请用 `fleet` 工具或浏览器设置页。
+
+> 实现说明：本插件的宿主行声明了 `Config` schema（字段标 `.volatile()`），因此它同时是一个 dsh settings 命名空间；
+> TUI 只在插件主动注册 `tuiSettingsSections` 时才渲染分区，所以 `index.js` 里同时做了分区注册。
+> 浏览器设置页是自定义页面，为避免设置服务再自动生成一张重复卡片，插件启动时调用 `settings.configure({ auto: false })`。
 
 ### 离线 CLI（引导 / 恢复；不依赖已安装的插件）
 
@@ -199,6 +222,10 @@ node scripts/fleet.mjs restore --stamp <时间戳>          # 恢复指定一代
   本插件的 `apply` 不会替你静默批准。
 - 清单里 `dsh-fleet` 自身的 `spec` 是本机绝对路径；移动仓库目录后需要同步改这一行。
 - 版本检测只对 `name@x.y.z` 形式的 spec 生效；git、路径、无版本 spec 不参与版本比较。
+- 元数据继承只覆盖上面五个字段，且来源是 profile 里已有的行：某个模型在任何 profile 里都没有元数据时，
+  它仍然只会被写成 `id` / `name`——TUI 里会如实显示“不支持推理强度”，这不是同步失败。
+- 清单里同一 bundle 只有一个 `spec`（`overrides` 只合并 `config` / `disabled`）：各 profile 已装版本不一致时，
+  `apply` 会按 spec 统一安装，包括把较新的版本降回合约版本。
 - 未纳管检测目前只覆盖 `dsh.profile.bundles` 的选择，不覆盖手写配置行 / provider。
 - HTTP 接口仅监听回环并要求同源来源（`127.0.0.1`、`localhost`、`[::1]` 视为同一本地源；
   带 `Sec-Fetch-Site: same-origin` 或 DSH 会话 Cookie 的同源请求也放行）；跨源与反向代理来源的写操作会被拒绝（读状态仍可用）。

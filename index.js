@@ -46,11 +46,15 @@ import { listProfileBackups, restoreProfileBackups } from './lib/restore.js'
 import { doctorReport } from './lib/doctor.js'
 import { capabilityFor, installInCurrentProfile, installViaCli } from './lib/install.js'
 import { stripUndefinedJson } from './lib/util.js'
+import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-fleet'
 
-/** No hard service dependencies: TUI has no webServer, and pluginManager/tools
- *  are resolved opportunistically so the page and the tool degrade separately. */
+/** No hard service dependencies: `inject` stays empty so the Host half loads in
+ *  every front door. `webServer` (a TUI profile mounts it too, on an ephemeral
+ *  loopback port with no browser front end), `tools`, `settings` and
+ *  `tuiSettingsSections` are resolved opportunistically, so each surface
+ *  degrades on its own. */
 export const inject = []
 
 const DEFAULTS = {
@@ -58,6 +62,41 @@ const DEFAULTS = {
   dshCommand: 'dsh',
   autoInstall: true,
 }
+
+/**
+ * Loader-row config, and the reason this row is a dsh settings namespace at
+ * all: the settings service derives namespaces from plugin `Config` schemas
+ * (`dsh-settings` `describe()`), and the TUI settings screen can only show a
+ * section for a namespace that exists. Without this schema the row config was
+ * YAML-only — invisible to every settings UI.
+ *
+ * The values are the same knobs as before; the manifest itself (profiles,
+ * bundles, providers, config rows) stays in `fleet.yml` — the matrix is not
+ * expressible as settings fields.
+ *
+ * `.volatile()` is what makes a field settings-editable at all: `dsh-settings`
+ * projects a namespace's form from the volatile subtree only
+ * (`volatileForm()`), so a schema without it yields no namespace and every
+ * settings UI shows nothing. `resolveEnv()` re-reads the values on each action
+ * rather than freezing the apply-time snapshot, so a write always takes effect.
+ */
+export const Config = z.object({
+  manifestPath: z
+    .string()
+    .default(DEFAULTS.manifestPath)
+    .description('Manifest path. `~` means the DSH home; a relative path resolves under it.')
+    .volatile(),
+  dshCommand: z
+    .string()
+    .default(DEFAULTS.dshCommand)
+    .description('The `dsh` executable used to install into other CLI profiles.')
+    .volatile(),
+  autoInstall: z
+    .boolean()
+    .default(DEFAULTS.autoInstall)
+    .description('Install missing packages before writing config.')
+    .volatile(),
+})
 
 const API_PREFIX = '/api/fleet'
 
@@ -87,17 +126,25 @@ function errorText(error) {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Read a config value: volatile fields resolve to a live wrapper with `get()`. */
+function configValue(value) {
+  return value !== null && typeof value === 'object' && typeof value.get === 'function' ? value.get() : value
+}
+
 function resolveEnv(ctx, config) {
   const profileContext = ctx.get('profileContext')
   const home = profileContext?.home ? expandHome(profileContext.home) : homeFrom()
+  const manifestPath = configValue(config?.manifestPath)
+  const dshCommand = configValue(config?.dshCommand)
+  const autoInstall = configValue(config?.autoInstall)
   return {
     home,
     currentProfile: profileContext?.name ?? process.env.DSH_PROFILE ?? null,
     installAnchor: profileContext?.installAnchor ?? null,
     profileDir: profileContext?.dir ?? null,
-    manifestPath: resolveManifestPath(config?.manifestPath, home),
-    dshCommand: config?.dshCommand || process.env.DSH_FLEET_DSH || DEFAULTS.dshCommand,
-    autoInstall: config?.autoInstall !== false,
+    manifestPath: resolveManifestPath(manifestPath, home),
+    dshCommand: dshCommand || process.env.DSH_FLEET_DSH || DEFAULTS.dshCommand,
+    autoInstall: autoInstall !== false,
     statePath: join(home, 'fleet.state.json'),
     lockPath: join(home, 'fleet.lock'),
   }
@@ -1008,12 +1055,15 @@ async function readJsonBody(req, limit = 1024 * 1024) {
   })
 }
 
-function makeRoute(kind, path, method, handler, env) {
+function makeRoute(kind, path, method, handler, getEnv) {
   return {
     kind,
     path,
     handler: async (req, res) => {
       try {
+        // Resolve per request: the row config is a settings namespace now, and
+        // a volatile edit must land without waiting for a restart.
+        const env = getEnv()
         if (!isLoopback(req)) return sendJson(res, 403, { ok: false, errors: ['loopback only'] })
         if (!isSameOrigin(req)) {
           await logRejection(env, req, 'same-origin only')
@@ -1022,7 +1072,7 @@ function makeRoute(kind, path, method, handler, env) {
         const actual = (req.method ?? 'GET').toUpperCase()
         if (actual !== method) return sendJson(res, 405, { ok: false, errors: [`use ${method}`] })
         const body = method === 'POST' ? await readJsonBody(req) : {}
-        const payload = await handler(body, req)
+        const payload = await handler(env, body, req)
         if (payload !== undefined) return sendJson(res, 200, payload)
         return sendJson(res, 200, { ok: true })
       } catch (error) {
@@ -1032,16 +1082,16 @@ function makeRoute(kind, path, method, handler, env) {
   }
 }
 
-function makeRoutes(ctx, env) {
+function makeRoutes(ctx, getEnv) {
   return [
-    makeRoute('exact', `${API_PREFIX}/state`, 'GET', async () => statusPayload(ctx, env), env),
-    makeRoute('exact', `${API_PREFIX}/plan`, 'POST', async (body) => planAction(ctx, env, body), env),
-    makeRoute('exact', `${API_PREFIX}/apply`, 'POST', async (body) => applyAction(ctx, env, body), env),
-    makeRoute('exact', `${API_PREFIX}/install`, 'POST', async (body) => installAction(ctx, env, body), env),
-    makeRoute('exact', `${API_PREFIX}/scope`, 'POST', async (body) => scopeAction(ctx, env, body), env),
-    makeRoute('exact', `${API_PREFIX}/adopt`, 'POST', async (body) => adoptAction(ctx, env, body), env),
-    makeRoute('exact', `${API_PREFIX}/restore`, 'POST', async (body) => restoreAction(ctx, env, body), env),
-    makeRoute('exact', `${API_PREFIX}/doctor`, 'GET', async () => doctorAction(ctx, env), env),
+    makeRoute('exact', `${API_PREFIX}/state`, 'GET', async (env) => statusPayload(ctx, env), getEnv),
+    makeRoute('exact', `${API_PREFIX}/plan`, 'POST', async (env, body) => planAction(ctx, env, body), getEnv),
+    makeRoute('exact', `${API_PREFIX}/apply`, 'POST', async (env, body) => applyAction(ctx, env, body), getEnv),
+    makeRoute('exact', `${API_PREFIX}/install`, 'POST', async (env, body) => installAction(ctx, env, body), getEnv),
+    makeRoute('exact', `${API_PREFIX}/scope`, 'POST', async (env, body) => scopeAction(ctx, env, body), getEnv),
+    makeRoute('exact', `${API_PREFIX}/adopt`, 'POST', async (env, body) => adoptAction(ctx, env, body), getEnv),
+    makeRoute('exact', `${API_PREFIX}/restore`, 'POST', async (env, body) => restoreAction(ctx, env, body), getEnv),
+    makeRoute('exact', `${API_PREFIX}/doctor`, 'GET', async (env) => doctorAction(ctx, env), getEnv),
   ]
 }
 
@@ -1093,7 +1143,7 @@ const TOOL_OUTPUT = {
   render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
 }
 
-function makeTool(ctx, env) {
+function makeTool(ctx, getEnv) {
   return {
     name: 'fleet',
     description:
@@ -1104,7 +1154,7 @@ function makeTool(ctx, env) {
     // single `undefined` property, so the action's raw object is cleaned here
     // rather than at its many construction sites (several deliberately emit
     // `undefined` for "absent", e.g. entryDetails' provides/prune).
-    execute: async (args) => stripUndefinedJson(await executeFleetAction(ctx, env, args)),
+    execute: async (args) => stripUndefinedJson(await executeFleetAction(ctx, getEnv(), args)),
   }
 }
 
@@ -1147,14 +1197,87 @@ async function executeFleetAction(ctx, env, args) {
 }
 
 // ---------------------------------------------------------------------------
+// Settings surfaces
+// ---------------------------------------------------------------------------
+
+/** Fields the TUI settings screen renders (it knows only text/number/boolean/select). */
+const TUI_SETTINGS_FIELDS = Object.freeze([
+  {
+    path: Object.freeze(['manifestPath']),
+    label: 'Manifest',
+    descriptions: Object.freeze({ zh: '清单路径' }),
+    hint: '`~` is the DSH home; a relative path resolves under it.',
+    hintDescriptions: Object.freeze({ zh: '`~` 指 DSH home；相对路径按它解析。' }),
+    kind: 'text',
+    placeholder: DEFAULTS.manifestPath,
+  },
+  {
+    path: Object.freeze(['autoInstall']),
+    label: 'Auto install',
+    descriptions: Object.freeze({ zh: '自动安装缺失插件' }),
+    hint: 'Install missing packages before writing config.',
+    hintDescriptions: Object.freeze({ zh: '应用配置前先补装缺失的插件包。' }),
+    kind: 'boolean',
+  },
+  {
+    path: Object.freeze(['dshCommand']),
+    label: 'dsh command',
+    descriptions: Object.freeze({ zh: 'dsh 命令' }),
+    hint: 'Used to install into other CLI profiles.',
+    hintDescriptions: Object.freeze({ zh: '用于向其它 CLI profile 安装插件包。' }),
+    kind: 'text',
+    placeholder: DEFAULTS.dshCommand,
+  },
+])
+
+/**
+ * The settings namespace this row edits: `dsh-settings` names a namespace by
+ * the loader entry id, which is not necessarily the package name (a profile may
+ * insert the row under another id). Fall back to the plugin name when the
+ * loader is not reachable.
+ */
+function settingsNamespace(ctx) {
+  try {
+    const entries = ctx.get('loader')?.entries?.() ?? []
+    const fiber = ctx.fiber
+    const own =
+      (fiber === undefined ? undefined : entries.find((entry) => entry.fiber === fiber)) ??
+      entries.find((entry) => entry.fiber?.runtime?.name === name)
+    const id = own?.options?.id
+    return typeof id === 'string' && id !== '' ? id : name
+  } catch {
+    return name
+  }
+}
+
+/** The section the TUI's `/settings` screen renders for this plugin. */
+function tuiSettingsSection(ctx) {
+  return {
+    ns: settingsNamespace(ctx),
+    title: 'Profiles (Fleet)',
+    descriptions: { zh: '多 Profile 管理' },
+    page: {
+      id: 'dsh-fleet',
+      title: 'Profiles (Fleet)',
+      descriptions: { zh: '多 Profile 管理' },
+    },
+    fields: TUI_SETTINGS_FIELDS,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin entry
 // ---------------------------------------------------------------------------
 
 export function apply(ctx, config) {
-  const env = resolveEnv(ctx, config)
+  // The row config is settings-editable (volatile fields). Resolve it at each
+  // use instead of freezing this snapshot: a settings write persists the row
+  // config and the Loader restarts the plugin, but nothing here should depend
+  // on that restart happening.
+  const getEnv = () => resolveEnv(ctx, config)
 
   ctx.inject(['webServer'], (webContext) => {
-    for (const route of makeRoutes(ctx, env)) {
+    for (const route of makeRoutes(ctx, getEnv)) {
       webContext.effect(
         () => webContext.webServer.register(route),
         `dsh-fleet: route ${route.path}`,
@@ -1164,8 +1287,27 @@ export function apply(ctx, config) {
 
   ctx.inject(['tools'], (toolContext) => {
     toolContext.effect(
-      () => toolContext.tools.register(makeTool(ctx, env)),
+      () => toolContext.tools.register(makeTool(ctx, getEnv)),
       'dsh-fleet: tool',
+    )
+  })
+
+  // TUI only: the terminal settings screen renders nothing for a plugin that
+  // does not register a section, so the three row knobs would stay YAML-only.
+  ctx.inject(['tuiSettingsSections'], (tuiContext) => {
+    tuiContext.effect(
+      () => tuiContext.tuiSettingsSections.register(tuiSettingsSection(ctx)),
+      'dsh-fleet: tui settings section',
+    )
+  })
+
+  // The browser half ships a richer page of its own, so keep the settings
+  // service from also auto-generating a generic card for this row.
+  ctx.inject(['settings'], (settingsContext) => {
+    if (typeof settingsContext.settings?.configure !== 'function') return
+    settingsContext.effect(
+      () => settingsContext.settings.configure({ auto: false }),
+      'dsh-fleet: settings presentation',
     )
   })
 }
