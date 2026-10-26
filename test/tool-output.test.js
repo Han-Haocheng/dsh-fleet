@@ -60,6 +60,8 @@ function registerTool(home, profileName, profileDir) {
       })
     },
     effect: (fn) => fn(),
+    on: () => () => {},
+    emit: () => {},
     logger: { warn() {} },
   }
   apply(ctx, { manifestPath: 'fleet.yml' })

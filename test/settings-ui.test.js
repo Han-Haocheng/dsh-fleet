@@ -28,8 +28,8 @@ items: []
  * the Host would resolve them; `inject` hands back an object shaped like the
  * real service.
  */
-function makeContext(home, { tui = true, settings = true, profile = 'dsh-tui' } = {}) {
-  const record = { sections: [], configured: [], tools: [] }
+function makeContext(home, { tui = true, settings = true, status = true, profile = 'dsh-tui' } = {}) {
+  const record = { sections: [], configured: [], tools: [], statusFields: [] }
   const serviceFor = (dep) => {
     if (dep === 'tools') {
       return { effect: (fn) => fn(), tools: { register: (definition) => record.tools.push(definition) } }
@@ -43,6 +43,17 @@ function makeContext(home, { tui = true, settings = true, profile = 'dsh-tui' } 
         tuiSettingsSections: {
           register: (section) => {
             record.sections.push(section)
+            return () => {}
+          },
+        },
+      }
+    }
+    if (dep === 'tuiStatus' && status) {
+      return {
+        effect: (fn) => fn(),
+        tuiStatus: {
+          setField: (key, text, options) => {
+            record.statusFields.push({ key, text, options })
             return () => {}
           },
         },
@@ -78,6 +89,8 @@ function makeContext(home, { tui = true, settings = true, profile = 'dsh-tui' } 
       }
     },
     effect: (fn) => fn(),
+    on: () => () => {},
+    emit: () => {},
     logger: { warn() {}, info() {}, error() {} },
   }
   return { ctx, record }
@@ -103,11 +116,13 @@ test('Config declares the three row knobs with defaults', () => {
       manifestPath: value.manifestPath.get(),
       dshCommand: value.dshCommand.get(),
       autoInstall: value.autoInstall.get(),
+      notifyOnDrift: value.notifyOnDrift.get(),
     },
     {
       manifestPath: 'fleet.yml',
       dshCommand: 'dsh',
       autoInstall: true,
+      notifyOnDrift: true,
     },
   )
 })
@@ -136,6 +151,7 @@ test('the TUI section exposes the manifest knobs and declares its own page', (t)
     [
       ['manifestPath', 'text'],
       ['autoInstall', 'boolean'],
+      ['notifyOnDrift', 'boolean'],
       ['dshCommand', 'text'],
     ],
   )
