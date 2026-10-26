@@ -28,6 +28,7 @@ import {
   renderManagedBlock,
   upsertManagedBlock,
   extractManagedBlock,
+  collectInheritedModelMeta,
   reconcileBundles,
 } from './lib/render.js'
 import {
@@ -227,6 +228,7 @@ function expectedEntries(snapshot, profile) {
       profile,
       knownProfiles,
       rowExists: (_profile, rowId) => state.rowIds.has(rowId),
+      inheritModelMeta: collectInheritedModelMeta(state.patchText),
     }).entries
   } catch {
     return null
