@@ -149,8 +149,14 @@ fleet(action="install")                         # 只补装缺包
 | 清单路径 | `fleet.yml` 的位置；`~` 指 DSH home，相对路径按它解析 |
 | 自动安装缺失插件 | `apply` 前是否先补装缺包 |
 | dsh 命令 | 向其它 CLI profile 安装时用的 `dsh` 可执行文件 |
+| 启动时提示待应用 | `notifyOnDrift`：启动后做一次**只读**检查，清单与本 profile 不一致时在页脚显示 `fleet: N 待应用` 并写一条警告；不会写文件 |
 
 改动即保存（写进该 profile 的 `cordis.patch.yml`，插件随即重启生效）。矩阵本身仍在 `fleet.yml` 里：
+
+> **生效时机**：fleet 没有 watcher——`fleet.yml` 的改动只在 `apply` 时落到各 profile。为了让「改完忘了应用」可见，
+> 插件启动后会延迟做一次只读 `plan`（`notifyOnDrift`，默认开）：有漂移就写日志并在 TUI 页脚显示 `fleet: N 待应用`，
+> `fleet status` 的返回里也带 `drift: { pending, byProfile }`；`apply` 成功后会自动复检并清掉提示。它不会写任何文件。
+
 TUI 设置屏只支持 text / number / boolean / select 四种控件，装不下整张矩阵，**它不是 fleet 设置页的等价物**。
 看矩阵、批量改 scope、预览/应用请用 `fleet` 工具或浏览器设置页。
 
@@ -177,6 +183,10 @@ desktop 会标为 `manual`，必须在 desktop 进程内执行。
 
 - 每个 profile 的 `cordis.patch.yml` 末尾追加一个带注释标记的受管块：
   `# >>> dsh-fleet v1 sha256:<hash>` … `# <<< dsh-fleet`，每次整体重写；块外手写内容一字不动。
+- **块内的外部行会被搬走，不会丢**：设置服务（TUI `/settings`、内置插件管理器）保存带行 id 的配置时是
+  追加到 profile patch 末尾，而受管块正好在末尾，于是那一行会落进块里。`apply` 重写块时会把
+  **清单里没有的 id** 搬到块后（`# preserved by dsh-fleet` 分隔），清单管理的 id 仍按清单来（范围外就删）。
+  所以「在 TUI 里改 fleet 自己的行配置」能活过 apply；而在块里手改**清单管理的行**仍会被清单覆盖。
 - 受管块在同层 patch 中位于最后，因此覆盖同文件里更早的同 id 行；但 home 层
   （`~/.dsh/cordis.patch.yml`）优先级更高，若在那里定义相同 id 会覆盖 fleet，fleet 会告警。
 - 写前备份：`<file>.bak-fleet-<时间戳>`，每个文件保留最近 5 份。

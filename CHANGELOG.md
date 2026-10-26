@@ -12,6 +12,9 @@
   同一模型的 `reasoningEfforts` / `contextWindow` / `maxTokens` / `input` / `output` 补全（清单值优先，
   `reasoningEfforts: false` 是显式关闭）。此前清单比现状“薄”时，受管块整段替换会静默抹掉推理强度，
   TUI 的模型选择器于是对所有模型显示“不支持”。
+- 启动漂移提醒（`notifyOnDrift`，默认开）：插件启动后延迟做一次只读 `plan`，清单与当前 profile 不一致时写一条
+  日志警告、在 TUI 页脚显示 `fleet: N 待应用`（`tuiStatus.setField`），并在 `fleet status` 返回里附
+  `drift: { pending, byProfile }`；`apply` 成功后经 `dsh-fleet/applied` 事件自动复检清理。只报告，绝不写文件。
 - 行配置改为按需解析（`resolveEnv()` 在每次工具调用 / HTTP 请求时读取），非 volatile 语义下也不会读到过期快照。
 - 浏览器侧不再被设置服务自动生成一张与自定义页重复的卡片：启动时 `settings.configure({ auto: false })`。
 - 新增依赖 `@deepseek-ai/schemastery`（`Config` schema 需要；与其它插件一致）。
@@ -27,12 +30,20 @@
 - 修正 Host 半注释：TUI profile 实际会挂载 `webServer`（`127.0.0.1:0`，无浏览器前端），
   `/api/fleet/*` 会被注册但无人可达；原先“TUI has no webServer”的判断不成立。
 
+- `apply` 重写受管块时，把「块内、但清单没有管理的 id」搬到块后（`# preserved by dsh-fleet`），
+  不再静默删除。设置服务保存配置是追加到 profile patch 末尾，而块在末尾，所以设置写入会落进块里：
+  修复前，在 TUI `/settings` 里改过的行会在下次 `apply` 时被整块重写抹掉（值悄悄回退）。
+  清单管理范围内的 id 仍按清单处理——离开 scope 就删，这是文档语义。
+- 修复 `upsertManagedBlock` 的第三个参数缺失时保持旧行为（只渲染、不搬行），渲染类调用方语义不变。
+
 ### 测试
 
 - 新增 `test/tool-output.test.js`：按 Harness 的规则（无 `undefined` + JSON 往返不变）校验
   `status` / `plan` / `doctor` / 干跑 `apply` 的工具输出，并覆盖 `stripUndefinedJson()` 本身。
 - 新增 `test/settings-ui.test.js`：校验 `Config` 默认值/类型拒绝、TUI 分区形状（ns、页签、三个字段的 kind）、
   `auto: false` 抑制，以及没有 settings 服务时（web/headless）不报错。
+- 新增 `test/managed-block-preserve.test.js`：覆盖块内外部行搬运、幂等、清单内 id 仍被删除、不完整块不搬、无 `managedIds` 时保持旧契约。
+- 新增 `test/drift.test.js`：覆盖漂移计数、徽标文案、启动提示（有漂移 / 已同步 / 关闭开关 / 无 tuiStatus 四种路径）以及「检查不写文件」。
 - 新增 `test/inherit-model-meta.test.js`：校验元数据继承的来源（只读受管块之外）、重复行后者优先、
   清单值优先、`reasoningEfforts: false` 不被覆盖，以及没有可继承数据时渲染字节不变。
 
