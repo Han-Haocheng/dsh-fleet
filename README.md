@@ -140,6 +140,27 @@ fleet(action="doctor")                          # 环境诊断
 fleet(action="install")                         # 只补装缺包
 ```
 
+### 同步：以当前端为准
+
+清单可以只描述「谁和谁共享」，值以**你当前所在的 profile** 为准推到其它端：
+
+```yaml
+sync:
+  targets: [all]          # 默认目标端
+  exclude: [llm-pi-ai]    # 不参与同步的行 id
+  overrides:              # 逐行改目标，或整行关掉
+    mnemon: { targets: [desktop] }
+    web-ui-pet: { enabled: false }
+```
+
+- `fleet(action="sync")` / `GET /api/fleet/sync`：**只读预览**，逐行列出将写入的字段与 `from → to`；
+- 清单启用 `sync` 时，`apply` 以当前 profile 为源写其它端（`dryRun` 仍只预览）；
+- 源端读取：运行态用 `configEditor`，离线用 `dsh --profile <p> --dump-config`；
+- 目标端差异以**有效配置**为基准；读不到该端的合成配置时回退受管块并给出告警；
+- 自动排除：fleet 自己、含 `!!js` 的行、不在任何 profile patch 里的行（DSH 核心行）、空配置行；
+- **P1 是整行覆盖**：同步时会用源端的整份 config 替换目标行（预览里 `to: undefined` 表示该键会被删掉）。
+  字段级三方比较（只推真正改过的键、冲突不写）是 P2。
+
 ### TUI（`dsh-tui` 的 `/settings`）
 
 `/settings` 里有一个 **「多 Profile 管理」** 页签，可改三个行配置项：

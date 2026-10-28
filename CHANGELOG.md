@@ -19,6 +19,14 @@
 - 浏览器侧不再被设置服务自动生成一张与自定义页重复的卡片：启动时 `settings.configure({ auto: false })`。
 - 新增依赖 `@deepseek-ai/schemastery`（`Config` schema 需要；与其它插件一致）。
 
+- **同步（P1）：以当前 profile 为源，把行配置推到其它端。** 清单新增 `sync:` 段：
+  `targets`（默认全部）、`exclude`（行 id 黑名单）、逐行 `overrides`（改 targets / 关掉）。
+  `fleet(action="sync")` 与 `GET /api/fleet/sync` 只读预览（每行列出将写的字段与 `from → to`，
+  每行最多 20 条并标 `truncated`）；清单启用 sync 时 `apply` 改走同步路径。
+  源端读取双后端：运行态 `configEditor`，离线 `dsh --profile <p> --dump-config`；目标端差异以
+  **有效配置**为基准（读不到时回退受管块并告警）。自动排除：fleet 自己、含 `!!js` 的行、不在任何
+  profile patch 里的行（DSH 核心行）、空配置行。P1 为整行覆盖，字段级三方比较留给 P2。
+
 ### 修复
 
 - `fleet` Agent 工具的返回值不再携带 `undefined` 属性。Harness 会把每个工具结果快照成无损 JSON，
@@ -42,6 +50,9 @@
   `status` / `plan` / `doctor` / 干跑 `apply` 的工具输出，并覆盖 `stripUndefinedJson()` 本身。
 - 新增 `test/settings-ui.test.js`：校验 `Config` 默认值/类型拒绝、TUI 分区形状（ns、页签、三个字段的 kind）、
   `auto: false` 抑制，以及没有 settings 服务时（web/headless）不报错。
+- 新增 `test/source.test.js` / `test/sync.test.js` / `test/sync-merge.test.js` / `test/sync-run.test.js` /
+  `test/manifest-sync.test.js` / `test/manifest-sync-roundtrip.test.js` / `test/manifest-sync-compat.test.js`：
+  覆盖策略解析、双后端读取、字段级差异、跨端合流（保留端内独有行）、编排与校验放宽。
 - 新增 `test/managed-block-preserve.test.js`：覆盖块内外部行搬运、幂等、清单内 id 仍被删除、不完整块不搬、无 `managedIds` 时保持旧契约。
 - 新增 `test/drift.test.js`：覆盖漂移计数、徽标文案、启动提示（有漂移 / 已同步 / 关闭开关 / 无 tuiStatus 四种路径）以及「检查不写文件」。
 - 新增 `test/inherit-model-meta.test.js`：校验元数据继承的来源（只读受管块之外）、重复行后者优先、

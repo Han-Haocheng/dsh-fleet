@@ -21,6 +21,7 @@ import {
   parseManifest,
   validateManifest,
   resolveScope,
+  resolveSync,
   isInScope,
   serializeManifest,
 } from './lib/manifest.js'
@@ -47,6 +48,7 @@ import { doctorReport } from './lib/doctor.js'
 import { capabilityFor, installInCurrentProfile, installViaCli } from './lib/install.js'
 import { stripUndefinedJson } from './lib/util.js'
 import { driftBadge, summarizeDrift } from './lib/drift.js'
+import { prepareSync } from './lib/sync-run.js'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-fleet'
@@ -653,6 +655,58 @@ async function planAction(ctx, env, { profiles } = {}) {
   return { ok: plan.errors.length === 0, changes: fileChanges(plan.changes), errors: plan.errors, pendingInstalls: plan.pendingInstalls }
 }
 
+/** Changes returned per synced row; a real diff can be far larger than a preview. */
+const MAX_SYNC_CHANGES = 20
+
+/**
+ * Project a sync plan for the tool and HTTP previews.
+ *
+ * A row keeps the documented shape (`id`, `targets`, `action`, `reason`,
+ * `changes`) and at most {@link MAX_SYNC_CHANGES} changes; a capped list is
+ * marked with `truncated: true` so a caller can tell "no more changes" from
+ * "that is all this preview shows".
+ */
+function summarizeSyncRows(plan) {
+  const rows = Array.isArray(plan?.rows) ? plan.rows : []
+  return rows.map((row) => {
+    const changes = Array.isArray(row?.changes) ? row.changes : []
+    const summary = {
+      id: row?.id,
+      targets: Array.isArray(row?.targets) ? row.targets : [],
+      action: row?.action,
+      // `null`, not `undefined`: the shape stays stable through JSON (HTTP)
+      // and the lossless-JSON tool boundary.
+      reason: row?.reason ?? null,
+      changes: changes.slice(0, MAX_SYNC_CHANGES),
+    }
+    if (changes.length > MAX_SYNC_CHANGES) summary.truncated = true
+    return summary
+  })
+}
+
+/**
+ * Read-only push preview: the current profile is the source and every other
+ * profile a target. The caller decides whether to write; this only reports.
+ */
+async function syncAction(ctx, env) {
+  const snapshot = await buildSnapshot(ctx, env)
+  const prepared = await prepareSync({
+    ctx,
+    env,
+    manifest: snapshot.manifest,
+    knownProfiles: snapshot.knownProfiles,
+    states: snapshot.states,
+  })
+  return {
+    ok: prepared.ok,
+    sourceProfile: prepared.sourceProfile,
+    backend: prepared.backend,
+    errors: prepared.errors,
+    warnings: prepared.warnings,
+    rows: summarizeSyncRows(prepared.plan),
+  }
+}
+
 async function runInstalls(ctx, env, pendingInstalls) {
   const results = []
   for (const pending of pendingInstalls) {
@@ -710,13 +764,41 @@ async function applyAction(ctx, env, { profiles, dryRun = false } = {}) {
     }
     const targets = targetProfiles(snapshot, profiles)
     if (targets.length === 0) return { ok: false, errors: ['no target profile selected or present'] }
-    let plan = filterPlan(snapshot.plan, targets)
+
+    // With sync enabled, the push policy — not the manifest's stale item list —
+    // decides what each target profile should carry. The merge is read-only;
+    // it only supplies the manifest the normal plan/apply path then uses.
+    let planManifest = null
+    const syncMeta = {}
+    if (resolveSync(snapshot.manifest, snapshot.knownProfiles).enabled) {
+      const prepared = await prepareSync({
+        ctx,
+        env,
+        manifest: snapshot.manifest,
+        knownProfiles: snapshot.knownProfiles,
+        states: snapshot.states,
+      })
+      if (!prepared.ok) return { ok: false, errors: prepared.errors }
+      planManifest = prepared.merged.manifest
+      syncMeta.syncSource = prepared.sourceProfile
+      syncMeta.syncBackend = prepared.backend
+    }
+    const buildActionPlan = (base) =>
+      planManifest === null
+        ? base.plan
+        : buildPlan({
+            manifest: planManifest,
+            knownProfiles: base.knownProfiles,
+            states: base.states,
+            capabilities: (target) => capabilityFor({ currentProfile: env.currentProfile, targetProfile: target }),
+          })
+    let plan = filterPlan(buildActionPlan(snapshot), targets)
 
     if (dryRun) {
-      return { ok: plan.errors.length === 0, dryRun: true, targets, ...plan }
+      return { ok: plan.errors.length === 0, dryRun: true, targets, ...plan, ...syncMeta }
     }
     if (plan.errors.length > 0) {
-      return { ok: false, errors: plan.errors, changes: plan.changes }
+      return { ok: false, errors: plan.errors, changes: plan.changes, ...syncMeta }
     }
 
     let installResults = []
@@ -726,6 +808,7 @@ async function applyAction(ctx, env, { profiles, dryRun = false } = {}) {
           ok: false,
           errors: ['missing packages and autoInstall is disabled'],
           pendingInstalls: plan.pendingInstalls,
+          ...syncMeta,
         }
       }
       installResults = await runInstalls(ctx, env, plan.pendingInstalls)
@@ -736,6 +819,7 @@ async function applyAction(ctx, env, { profiles, dryRun = false } = {}) {
           errors: [`${failed.length} package installation(s) failed; no profile files were changed`],
           installResults,
           changes: plan.changes,
+          ...syncMeta,
         }
       }
       const manual = installResults.filter((result) => result.status === 'manual')
@@ -745,24 +829,25 @@ async function applyAction(ctx, env, { profiles, dryRun = false } = {}) {
           errors: manual.map((entry) => `${entry.profile}: ${entry.detail} (${entry.spec ?? entry.bundle})`),
           installResults,
           changes: plan.changes,
+          ...syncMeta,
         }
       }
       snapshot = await buildSnapshot(ctx, env)
-      plan = filterPlan(snapshot.plan, targets)
+      plan = filterPlan(buildActionPlan(snapshot), targets)
       if (plan.errors.length > 0) {
-        return { ok: false, errors: plan.errors, installResults }
+        return { ok: false, errors: plan.errors, installResults, ...syncMeta }
       }
     }
 
     const writeResult = await applyPlan({
-      manifest: snapshot.manifest,
+      manifest: planManifest ?? snapshot.manifest,
       knownProfiles: snapshot.knownProfiles,
       states: snapshot.states,
       plan,
       ctx,
     })
     if (writeResult.errors?.length > 0) {
-      return { ok: false, errors: writeResult.errors, installResults }
+      return { ok: false, errors: writeResult.errors, installResults, ...syncMeta }
     }
 
     const lastApplied = nowIso()
@@ -787,6 +872,7 @@ async function applyAction(ctx, env, { profiles, dryRun = false } = {}) {
       backups: writeResult.backups ?? [],
       restartRequired: installResults.filter((entry) => entry.restartRequired).map((entry) => entry.profile),
       lastApplied,
+      ...syncMeta,
     }
   } finally {
     await lock.release()
@@ -1099,6 +1185,7 @@ function makeRoutes(ctx, getEnv) {
   return [
     makeRoute('exact', `${API_PREFIX}/state`, 'GET', async (env) => statusPayload(ctx, env), getEnv),
     makeRoute('exact', `${API_PREFIX}/plan`, 'POST', async (env, body) => planAction(ctx, env, body), getEnv),
+    makeRoute('exact', `${API_PREFIX}/sync`, 'GET', async (env) => syncAction(ctx, env), getEnv),
     makeRoute('exact', `${API_PREFIX}/apply`, 'POST', async (env, body) => applyAction(ctx, env, body), getEnv),
     makeRoute('exact', `${API_PREFIX}/install`, 'POST', async (env, body) => installAction(ctx, env, body), getEnv),
     makeRoute('exact', `${API_PREFIX}/scope`, 'POST', async (env, body) => scopeAction(ctx, env, body), getEnv),
@@ -1118,8 +1205,8 @@ const TOOL_PARAMETERS = {
   properties: {
     action: {
       type: 'string',
-      enum: ['status', 'plan', 'apply', 'scope', 'adopt', 'restore', 'doctor', 'install'],
-      description: 'status reads the matrix; plan is a dry run; apply writes managed blocks and bundle selections (installs missing packages first); scope changes one entry\'s profile lock; adopt adds a profile bundle to the manifest; restore rolls back fleet backups; doctor diagnoses the environment; install only installs missing packages.',
+      enum: ['status', 'plan', 'apply', 'sync', 'scope', 'adopt', 'restore', 'doctor', 'install'],
+      description: 'status reads the matrix; plan is a dry run; apply writes managed blocks and bundle selections (installs missing packages first); sync previews a push from the current profile to the other profiles (read-only; write with apply); scope changes one entry\'s profile lock; adopt adds a profile bundle to the manifest; restore rolls back fleet backups; doctor diagnoses the environment; install only installs missing packages.',
     },
     profiles: {
       type: 'array',
@@ -1187,6 +1274,9 @@ async function executeFleetAction(ctx, env, args) {
     const targets = targetProfiles(snapshot, args?.profiles)
     const plan = filterPlan(snapshot.plan, targets)
     return { ok: plan.errors.length === 0, targets, ...plan, manifestErrors: snapshot.manifestErrors }
+  }
+  if (action === 'sync') {
+    return syncAction(ctx, env)
   }
   if (action === 'apply') {
     return applyAction(ctx, env, { profiles: args?.profiles, dryRun: args?.dryRun === true })
