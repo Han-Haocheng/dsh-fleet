@@ -158,8 +158,13 @@ sync:
 - 源端读取：运行态用 `configEditor`，离线用 `dsh --profile <p> --dump-config`；
 - 目标端差异以**有效配置**为基准；读不到该端的合成配置时回退受管块并给出告警；
 - 自动排除：fleet 自己、含 `!!js` 的行、不在任何 profile patch 里的行（DSH 核心行）、空配置行；
-- **P1 是整行覆盖**：同步时会用源端的整份 config 替换目标行（预览里 `to: undefined` 表示该键会被删掉）。
-  字段级三方比较（只推真正改过的键、冲突不写）是 P2。
+- **三方基线**：上次同步的值记在 `$DSH_HOME/fleet.sync.json`。有基线时只推**源端真正改过的字段**；
+  目标端也改过同一字段 → 判冲突（`action:'conflict'`，列出 `base/source/target`），该行整份不写；
+  源端没改的字段永不覆盖目标端。首次同步（服务端还没有基线）才整行推送并标 `firstSync`。
+- **可用性门禁**：包在目标端的 profile 与安装锚点里都解析不到 → 该目标跳过（`plugin-missing`）；
+  两端版本不同 → 照常同步但告警（`version-mismatch`），不会把新版本的配置硬塞给旧版本的端。
+- 基线只在 `apply` 成功（且非 `dryRun`）后更新；`restore` 成功后清空。基线文件损坏时 `apply` 直接中止，
+  避免把「读不出来」当成「全都没同步过」而整行覆盖。
 
 ### TUI（`dsh-tui` 的 `/settings`）
 

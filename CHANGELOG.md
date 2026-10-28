@@ -32,6 +32,12 @@
   `dsh-client-ui-sidebar`。设置页是控制插件的，fleet 控制的是同步，入口跟着语义走。
   图标为原创内联 SVG（三个节点连线，`size` / `active` 驱动尺寸与选中态），无外链资源。
 
+- **同步 P2：三方基线、冲突不写、可用性门禁。** `$DSH_HOME/fleet.sync.json` 记录上次同步值；
+  有基线时只推源端改过的字段，目标端也改过则判冲突并整行不写（`base/source/target` 全给出）；
+  首次同步整行推送并标 `firstSync`。目标端解析不到该包（profile + 安装锚点都查）→ 跳过 `plugin-missing`；
+  两端版本不一致 → 仍同步但告警 `version-mismatch`。基线只在 apply 成功后更新、restore 后清空、
+  损坏时 apply 中止。
+
 ### 修复
 
 - `fleet` Agent 工具的返回值不再携带 `undefined` 属性。Harness 会把每个工具结果快照成无损 JSON，
