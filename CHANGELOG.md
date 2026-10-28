@@ -27,6 +27,11 @@
   **有效配置**为基准（读不到时回退受管块并告警）。自动排除：fleet 自己、含 `!!js` 的行、不在任何
   profile patch 里的行（DSH 核心行）、空配置行。P1 为整行覆盖，字段级三方比较留给 P2。
 
+- 浏览器入口从「设置 → 多 Profile 管理」迁到**侧栏面板**：注册 `sidebar.panellist`（图标，order 40）
+  与 `main`（key `fleet`，复用原页面）；`dsh.client.inject` 从 `dsh-client-ui-settings` 换成
+  `dsh-client-ui-sidebar`。设置页是控制插件的，fleet 控制的是同步，入口跟着语义走。
+  图标为原创内联 SVG（三个节点连线，`size` / `active` 驱动尺寸与选中态），无外链资源。
+
 ### 修复
 
 - `fleet` Agent 工具的返回值不再携带 `undefined` 属性。Harness 会把每个工具结果快照成无损 JSON，

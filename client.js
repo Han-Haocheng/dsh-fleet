@@ -1241,22 +1241,96 @@ window.__ModuleLoader__.load({
       }
     }
 
+    // Sidebar panel glyph: three nodes wired into a triangle — one fleet syncing
+    // across several endpoints. The nodes sit on the 24x24 grid the viewBox
+    // requests; each connector stops short of the node rings so all three stay
+    // distinct at the 16/18px sizes the sidebar asks for.
+    const ICON_NODES = [
+      [12, 5.7],
+      [5.6, 18.1],
+      [18.4, 18.1],
+    ]
+    const ICON_LINKS = [
+      [0, 1],
+      [0, 2],
+      [1, 2],
+    ]
+    const ICON_NODE_R = 2.3
+    const ICON_LINK_GAP = 3.4
+
+    // Owner props from `sidebar.panellist`: `size` is the requested square edge,
+    // `active` is whether the fleet main panel is the selected one. The sidebar
+    // owns the button, tooltip and accessible name; this returns the glyph only.
+    function FleetIcon({ size, active }) {
+      const edge = typeof size === 'number' && size > 0 ? size : 16
+      const segments = ICON_LINKS.map(([from, to]) => {
+        const [x1, y1] = ICON_NODES[from]
+        const [x2, y2] = ICON_NODES[to]
+        const length = Math.hypot(x2 - x1, y2 - y1)
+        const dx = ((x2 - x1) / length) * ICON_LINK_GAP
+        const dy = ((y2 - y1) / length) * ICON_LINK_GAP
+        return [x1 + dx, y1 + dy, x2 - dx, y2 - dy]
+      })
+      return h(
+        'svg',
+        {
+          width: edge,
+          height: edge,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: active ? 2.1 : 1.6,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': 'true',
+          focusable: 'false',
+          style: { display: 'block' },
+        },
+        ...segments.map(([x1, y1, x2, y2], index) =>
+          h('line', { key: `link:${index}`, x1, y1, x2, y2, opacity: active ? 1 : 0.85 }),
+        ),
+        ...ICON_NODES.map(([cx, cy], index) =>
+          h('circle', {
+            key: `node:${index}`,
+            cx,
+            cy,
+            r: ICON_NODE_R,
+            fill: active ? 'currentColor' : 'none',
+          }),
+        ),
+      )
+    }
+
     return {
       inject: ['locale', 'slots'],
       apply(ctx) {
         ctx.effect(() => ctx.locale.register('dsh-fleet', DICT), 'dsh-fleet: locale')
         const t = ctx.locale.bind('dsh-fleet')
         const Page = makePage(t)
-        ctx.slots.inject('settings.section', () => {
+
+        // The panel body: `main` is keyed by panel id, and every key other than
+        // the reserved `conversation` renders without a session binding.
+        ctx.slots.inject('main', () => {
+          try {
+            return ctx.slots.register({ name: 'main', key: 'fleet' }, Page)
+          } catch {
+            return () => {}
+          }
+        })
+
+        // The entry point: a global panel icon in the sidebar. Each list id
+        // addresses the matching main panel, and the sidebar resolves the row
+        // label from this registration's metadata.
+        ctx.slots.inject('sidebar.panellist', () => {
           try {
             return ctx.slots.register(
               {
-                name: 'settings.section',
+                name: 'sidebar.panellist',
                 id: 'fleet',
-                order: 18,
+                order: 40,
                 label: () => t('title'),
               },
-              Page,
+              FleetIcon,
             )
           } catch {
             return () => {}

@@ -7,7 +7,7 @@
 ~/.dsh/fleet.yml  ──render──▶  每个 profile 的 cordis.patch.yml 受管块
       │                        每个 profile 的 dsh.profile.bundles 选择
       │
-      ├─ 浏览器设置页（Settings → 多 Profile 管理）
+      ├─ 浏览器侧栏面板（侧栏图标 → 多 Profile 管理）
       ├─ Agent 工具 `fleet`（TUI 里也可用）
       └─ 离线 CLI `scripts/fleet.mjs`（引导/恢复）
 ```
@@ -112,7 +112,7 @@ plugin_manager install_bundle(target="/path/to/dsh-fleet")
 
 ### 浏览器（web / desktop）
 
-Settings → **多 Profile 管理**：
+点侧栏的 **多 Profile 管理** 图标（不再放在设置里——设置是用来控制插件的，fleet 控制的是同步）：
 
 - 顶部三张 profile 状态卡：当前 profile、问题数、待应用数、清单路径、写锁、上次应用时间；
 - 主体按 **插件包 / 模型接入 / 配置行** 三个页签分开，不再混在一张长表里，页签上带条目数；
@@ -179,11 +179,11 @@ sync:
 > `fleet status` 的返回里也带 `drift: { pending, byProfile }`；`apply` 成功后会自动复检并清掉提示。它不会写任何文件。
 
 TUI 设置屏只支持 text / number / boolean / select 四种控件，装不下整张矩阵，**它不是 fleet 设置页的等价物**。
-看矩阵、批量改 scope、预览/应用请用 `fleet` 工具或浏览器设置页。
+看矩阵、批量改 scope、预览/应用请用 `fleet` 工具或浏览器侧栏面板。
 
 > 实现说明：本插件的宿主行声明了 `Config` schema（字段标 `.volatile()`），因此它同时是一个 dsh settings 命名空间；
 > TUI 只在插件主动注册 `tuiSettingsSections` 时才渲染分区，所以 `index.js` 里同时做了分区注册。
-> 浏览器设置页是自定义页面，为避免设置服务再自动生成一张重复卡片，插件启动时调用 `settings.configure({ auto: false })`。
+> 浏览器入口注册在 `sidebar.panellist`（图标）+ `main`（同名面板），不再占用 `settings.section`；为避免设置服务自动生成一张重复卡片，插件启动时仍调用 `settings.configure({ auto: false })`。
 
 ### 离线 CLI（引导 / 恢复；不依赖已安装的插件）
 
@@ -234,7 +234,7 @@ node scripts/fleet.mjs restore --profiles web,dsh-tui   # 恢复每个 profile �
 node scripts/fleet.mjs restore --stamp <时间戳>          # 恢复指定一代备份
 ```
 
-设置页底部在有备份时显示「回滚上次应用」。回滚前还会把当前内容再备份一次，所以回滚本身也可以撤销。
+侧栏面板底部在有备份时显示「回滚上次应用」。回滚前还会把当前内容再备份一次，所以回滚本身也可以撤销。
 
 ```bash
 # 手动移除受管块：删掉 # >>> dsh-fleet … # <<< dsh-fleet 之间的内容
