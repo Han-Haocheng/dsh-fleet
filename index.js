@@ -49,6 +49,7 @@ import { capabilityFor, installInCurrentProfile, installViaCli } from './lib/ins
 import { stripUndefinedJson } from './lib/util.js'
 import { driftBadge, summarizeDrift } from './lib/drift.js'
 import { prepareSync } from './lib/sync-run.js'
+import { clearBaseline, readBaseline, recordBaseline } from './lib/sync-baseline.js'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-fleet'
@@ -665,11 +666,17 @@ const MAX_SYNC_CHANGES = 20
  * `changes`) and at most {@link MAX_SYNC_CHANGES} changes; a capped list is
  * marked with `truncated: true` so a caller can tell "no more changes" from
  * "that is all this preview shows".
+ *
+ * P2 adds three optional fields, present only when they apply: `conflicts`
+ * (both sides edited the same field, so the row is withheld), `skippedTargets`
+ * (a plugin row whose package the target does not have) and `firstSync` (the
+ * row has no baseline entry, so it moves as a whole).
  */
 function summarizeSyncRows(plan) {
   const rows = Array.isArray(plan?.rows) ? plan.rows : []
   return rows.map((row) => {
     const changes = Array.isArray(row?.changes) ? row.changes : []
+    const conflicts = Array.isArray(row?.conflicts) ? row.conflicts : []
     const summary = {
       id: row?.id,
       targets: Array.isArray(row?.targets) ? row.targets : [],
@@ -680,8 +687,29 @@ function summarizeSyncRows(plan) {
       changes: changes.slice(0, MAX_SYNC_CHANGES),
     }
     if (changes.length > MAX_SYNC_CHANGES) summary.truncated = true
+    if (row?.firstSync === true) summary.firstSync = true
+    if (Array.isArray(row?.skippedTargets) && row.skippedTargets.length > 0) {
+      summary.skippedTargets = row.skippedTargets
+    }
+    if (conflicts.length > 0) {
+      summary.conflicts = conflicts.slice(0, MAX_SYNC_CHANGES)
+      if (conflicts.length > MAX_SYNC_CHANGES) summary.truncated = true
+    }
     return summary
   })
+}
+
+/**
+ * Read the persisted sync baseline for this Harness home.
+ *
+ * A missing file is the normal first-sync state. A malformed one still yields an
+ * empty rows map (first-sync semantics) but the error is returned so the caller
+ * can decide whether to surface it; a push that cannot read its baseline must
+ * not silently treat a corrupt ancestor as "everything is new" for writing
+ * purposes, so `apply` refuses to run against it.
+ */
+function readSyncBaseline(env) {
+  return readBaseline({ home: env.home })
 }
 
 /**
@@ -690,19 +718,23 @@ function summarizeSyncRows(plan) {
  */
 async function syncAction(ctx, env) {
   const snapshot = await buildSnapshot(ctx, env)
+  const baseline = readSyncBaseline(env)
   const prepared = await prepareSync({
     ctx,
     env,
     manifest: snapshot.manifest,
     knownProfiles: snapshot.knownProfiles,
     states: snapshot.states,
+    baseline: baseline.baseline.rows,
   })
   return {
     ok: prepared.ok,
     sourceProfile: prepared.sourceProfile,
     backend: prepared.backend,
     errors: prepared.errors,
-    warnings: prepared.warnings,
+    warnings: baseline.ok
+      ? prepared.warnings
+      : [`sync baseline is unavailable (${baseline.error}); planning as a first sync`, ...prepared.warnings],
     rows: summarizeSyncRows(prepared.plan),
   }
 }
@@ -769,19 +801,28 @@ async function applyAction(ctx, env, { profiles, dryRun = false } = {}) {
     // decides what each target profile should carry. The merge is read-only;
     // it only supplies the manifest the normal plan/apply path then uses.
     let planManifest = null
+    let preparedSync = null
     const syncMeta = {}
     if (resolveSync(snapshot.manifest, snapshot.knownProfiles).enabled) {
-      const prepared = await prepareSync({
+      // The baseline is the common ancestor of the three-way comparison. A
+      // missing file is the normal first sync; a corrupt one must abort instead
+      // of planning every row as new and overwriting target-local edits.
+      const baseline = readSyncBaseline(env)
+      if (!baseline.ok) {
+        return { ok: false, errors: [`sync baseline is unreadable: ${baseline.error}`] }
+      }
+      preparedSync = await prepareSync({
         ctx,
         env,
         manifest: snapshot.manifest,
         knownProfiles: snapshot.knownProfiles,
         states: snapshot.states,
+        baseline: baseline.baseline.rows,
       })
-      if (!prepared.ok) return { ok: false, errors: prepared.errors }
-      planManifest = prepared.merged.manifest
-      syncMeta.syncSource = prepared.sourceProfile
-      syncMeta.syncBackend = prepared.backend
+      if (!preparedSync.ok) return { ok: false, errors: preparedSync.errors }
+      planManifest = preparedSync.merged.manifest
+      syncMeta.syncSource = preparedSync.sourceProfile
+      syncMeta.syncBackend = preparedSync.backend
     }
     const buildActionPlan = (base) =>
       planManifest === null
@@ -858,6 +899,20 @@ async function applyAction(ctx, env, { profiles, dryRun = false } = {}) {
       )
     } catch {
       // The state file is informational; a write failure must not fail the apply.
+    }
+
+    // The push succeeded, so the source values that were actually sent become
+    // the next comparison's ancestor. Only rows/targets this apply selected and
+    // this plan pushed are recorded: a dry run returned above, and every early
+    // failure returned before any file (or baseline) was written. A baseline
+    // write failure is reported but cannot undo an applied push.
+    if (preparedSync !== null) {
+      const selected = new Set(targets)
+      const entries = (preparedSync.baselineEntries ?? []).filter((entry) => selected.has(entry.profile))
+      if (entries.length > 0) {
+        const recorded = recordBaseline({ home: env.home, entries })
+        if (!recorded.ok) syncMeta.baselineError = recorded.error
+      }
     }
 
     try {
@@ -1008,6 +1063,10 @@ async function restoreAction(ctx, env, { profiles, stamp } = {}) {
       return { ok: false, errors: ['no fleet backups to restore'] }
     }
     await rm(env.statePath, { force: true })
+    // The profiles were rolled back to a state that predates the last push, so
+    // no recorded base describes them any more. `restore` is the one place that
+    // clears the whole baseline; a failure here must not fail the restore.
+    if (errors.length === 0) clearBaseline({ home: env.home })
     return { ok: errors.length === 0, restored, errors, state: await statusPayload(ctx, env) }
   } catch (error) {
     return { ok: false, errors: [errorText(error)] }

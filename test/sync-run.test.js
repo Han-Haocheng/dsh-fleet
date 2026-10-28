@@ -512,3 +512,322 @@ test('a failed target dump falls back to the managed block with a warning', asyn
   assert.equal(row.action, 'push')
   for (const change of row.changes) assert.equal(change.from, 'slow', 'the managed block supplied the target value')
 })
+
+// ---------------------------------------------------------------------------
+// P2: target availability gate, baseline passthrough and field-level merge
+// ---------------------------------------------------------------------------
+
+/** One runtime configuration row that names the plugin package it configures. */
+function pluginRowOf(id, name, config) {
+  return { entry: { options: { id, name }, fiber: { config } } }
+}
+
+/** A `readProfileState()`-shaped state with installed packages and versions. */
+function pkgState(home, profile, { installed = [], versions = {}, patchText = blockOf([]) } = {}) {
+  return {
+    name: profile,
+    dir: join(home, 'profiles', profile),
+    present: true,
+    bundles: [...installed],
+    dependencies: {},
+    patchText,
+    installed: new Set(installed),
+    versions: new Map(Object.entries(versions)),
+    sources: new Map(),
+    rowIds: new Set(),
+  }
+}
+
+/** profile -> pkgState, as `buildSnapshot()` passes to prepareSync. */
+function gatedStates(home, entries) {
+  return new Map(Object.entries(entries).map(([profile, spec]) => [profile, pkgState(home, profile, spec)]))
+}
+
+/** A target dump whose single row has `config`. */
+function dumpedRow(id, config) {
+  return async () => ({ ok: true, text: stringifyYaml([{ id, config }]), error: null })
+}
+
+test('a named row skips a target that does not have the plugin installed', async (t) => {
+  const home = makeHome(t)
+  const { ctx } = makeContext(home, {
+    configuration: () => [pluginRowOf('demo', 'demo-plugin', { mode: 'fast' })],
+  })
+  const states = gatedStates(home, {
+    web: { installed: ['demo-plugin'], versions: { 'demo-plugin': '1.0.0' } },
+    desktop: { installed: [], versions: {} },
+    laptop: { installed: ['demo-plugin'], versions: { 'demo-plugin': '1.0.0' } },
+  })
+
+  const prepared = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf(),
+    knownProfiles: KNOWN,
+    states,
+    dumpTarget: dumpedRow('demo', { mode: 'slow' }),
+    baseline: {},
+  })
+
+  assert.equal(prepared.ok, true)
+  const row = prepared.plan.rows.find((entry) => entry.id === 'demo')
+  assert.equal(row.action, 'push')
+  assert.deepEqual(row.targets, ['laptop'], 'the profile without the package is dropped')
+  assert.deepEqual(row.skippedTargets, [{ profile: 'desktop', reason: 'plugin-missing' }])
+  assert.deepEqual(row.changes.map((change) => change.profile), ['laptop'])
+  assert.deepEqual(prepared.merged.items.find((item) => item.id === 'demo')?.scope, ['laptop'])
+  assert.deepEqual(prepared.warnings, [])
+})
+
+test('a row whose every target lacks the plugin is skipped as plugin-missing', async (t) => {
+  const home = makeHome(t)
+  const { ctx } = makeContext(home, {
+    configuration: () => [pluginRowOf('demo', 'demo-plugin', { mode: 'fast' })],
+  })
+  const states = gatedStates(home, {
+    web: { installed: ['demo-plugin'], versions: { 'demo-plugin': '1.0.0' } },
+    desktop: { installed: [], versions: {} },
+  })
+
+  const prepared = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf({ profiles: ['web', 'desktop'], sync: { enabled: true, targets: ['desktop'] } }),
+    knownProfiles: ['web', 'desktop'],
+    states,
+    dumpTarget: dumpedRow('demo', { mode: 'slow' }),
+    baseline: {},
+  })
+
+  const row = prepared.plan.rows.find((entry) => entry.id === 'demo')
+  assert.equal(row.action, 'skip')
+  assert.equal(row.reason, 'plugin-missing')
+  assert.deepEqual(row.targets, [])
+  assert.deepEqual(row.changes, [])
+  assert.deepEqual(row.skippedTargets, [{ profile: 'desktop', reason: 'plugin-missing' }])
+  assert.equal(prepared.merged.items.some((item) => item.id === 'demo'), false)
+})
+
+test('a version mismatch warns but still pushes', async (t) => {
+  const home = makeHome(t)
+  const { ctx } = makeContext(home, {
+    configuration: () => [pluginRowOf('demo', 'demo-plugin', { mode: 'fast' })],
+  })
+  const states = gatedStates(home, {
+    web: { installed: ['demo-plugin'], versions: { 'demo-plugin': '1.0.0' } },
+    desktop: { installed: ['demo-plugin'], versions: { 'demo-plugin': '2.0.0' } },
+    laptop: { installed: ['demo-plugin'], versions: { 'demo-plugin': '1.0.0' } },
+  })
+
+  const prepared = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf(),
+    knownProfiles: KNOWN,
+    states,
+    dumpTarget: dumpedRow('demo', { mode: 'slow' }),
+    baseline: {},
+  })
+
+  assert.deepEqual(prepared.warnings, [
+    'version mismatch for demo on desktop: 1.0.0 -> 2.0.0',
+  ])
+  const row = prepared.plan.rows.find((entry) => entry.id === 'demo')
+  assert.equal(row.action, 'push')
+  assert.deepEqual(row.targets, ['desktop', 'laptop'], 'a version mismatch never blocks the push')
+  assert.deepEqual(row.skippedTargets, undefined)
+})
+
+test('a nameless built-in row is never availability-gated', async (t) => {
+  const home = makeHome(t)
+  const { ctx } = makeContext(home, {
+    configuration: () => [rowOf('demo', { mode: 'fast' })],
+  })
+  const states = gatedStates(home, {
+    web: { installed: [], versions: {} },
+    desktop: { installed: [], versions: {} },
+  })
+
+  const prepared = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf({ profiles: ['web', 'desktop'], sync: { enabled: true, targets: ['desktop'] } }),
+    knownProfiles: ['web', 'desktop'],
+    states,
+    dumpTarget: dumpedRow('demo', { mode: 'slow' }),
+    baseline: {},
+  })
+
+  const row = prepared.plan.rows.find((entry) => entry.id === 'demo')
+  assert.equal(row.action, 'push')
+  assert.deepEqual(row.targets, ['desktop'])
+  assert.equal('skippedTargets' in row, false)
+})
+
+test('prepareSync passes the baseline through and preserves target-local fields', async (t) => {
+  const home = makeHome(t)
+  const sourceConfig = { mode: 'fast', token: 'secret' }
+  const { ctx } = makeContext(home, {
+    configuration: () => [rowOf('demo', sourceConfig)],
+  })
+  const states = gatedStates(home, {
+    web: {},
+    desktop: { patchText: blockOf([{ id: 'demo', config: { mode: 'slow', token: 'local' } }]) },
+  })
+  const targetDump = async () => ({
+    ok: true,
+    text: stringifyYaml([{ id: 'demo', config: { mode: 'slow', token: 'local' } }]),
+    error: null,
+  })
+
+  const prepared = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf({ profiles: ['web', 'desktop'], sync: { enabled: true, targets: ['desktop'] } }),
+    knownProfiles: ['web', 'desktop'],
+    states,
+    dumpTarget: targetDump,
+    baseline: { demo: { desktop: { mode: 'slow', token: 'secret' } } },
+  })
+
+  assert.deepEqual(prepared.warnings, [])
+  const row = prepared.plan.rows.find((entry) => entry.id === 'demo')
+  assert.deepEqual(row, {
+    id: 'demo',
+    targets: ['desktop'],
+    action: 'push',
+    changes: [{ profile: 'desktop', path: ['mode'], from: 'slow', to: 'fast' }],
+  })
+  // The target edited `token` itself; the push writes only `mode` and keeps it.
+  assert.deepEqual(prepared.merged.items, [
+    { id: 'demo', scope: ['desktop'], config: { mode: 'fast', token: 'local' }, origin: 'sync' },
+  ])
+  assert.deepEqual(prepared.baselineEntries, [
+    { id: 'demo', profile: 'desktop', config: sourceConfig },
+  ])
+
+  // Without a baseline the same fixtures fall back to the P1 two-way diff.
+  const legacy = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf({ profiles: ['web', 'desktop'], sync: { enabled: true, targets: ['desktop'] } }),
+    knownProfiles: ['web', 'desktop'],
+    states,
+    dumpTarget: targetDump,
+  })
+  assert.deepEqual(legacy.plan.rows.find((entry) => entry.id === 'demo').changes, [
+    { profile: 'desktop', path: ['mode'], from: 'slow', to: 'fast' },
+    { profile: 'desktop', path: ['token'], from: 'local', to: 'secret' },
+  ])
+  assert.deepEqual(legacy.merged.items[0].config, sourceConfig)
+})
+
+test('a conflict row produces no sync item and therefore no write', async (t) => {
+  const home = makeHome(t)
+  const { ctx } = makeContext(home, {
+    configuration: () => [rowOf('demo', { mode: 'fast' })],
+  })
+  const states = gatedStates(home, {
+    web: {},
+    desktop: { patchText: blockOf([{ id: 'demo', config: { mode: 'local' } }]) },
+  })
+
+  const prepared = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf({ profiles: ['web', 'desktop'], sync: { enabled: true, targets: ['desktop'] } }),
+    knownProfiles: ['web', 'desktop'],
+    states,
+    dumpTarget: dumpedRow('demo', { mode: 'local' }),
+    baseline: { demo: { desktop: { mode: 'slow' } } },
+  })
+
+  const row = prepared.plan.rows.find((entry) => entry.id === 'demo')
+  assert.equal(row.action, 'conflict')
+  assert.deepEqual(row.conflicts, [
+    { profile: 'desktop', path: ['mode'], base: 'slow', source: 'fast', target: 'local' },
+  ])
+  assert.equal(
+    prepared.merged.items.some((item) => item.origin === 'sync'),
+    false,
+    'a withheld row never reaches the manifest that apply writes',
+  )
+  assert.deepEqual(prepared.baselineEntries, [])
+})
+
+test('three-way merge splits an item when the targets keep different local fields', async (t) => {
+  const home = makeHome(t)
+  const { ctx } = makeContext(home, {
+    configuration: () => [rowOf('demo', { mode: 'fast', token: 'secret' })],
+  })
+  const states = gatedStates(home, {
+    web: {},
+    desktop: { patchText: blockOf([{ id: 'demo', config: { mode: 'slow', token: 'desktop' } }]) },
+    laptop: { patchText: blockOf([{ id: 'demo', config: { mode: 'slow', token: 'laptop' } }]) },
+  })
+  const dumpTarget = async ({ profile }) => ({
+    ok: true,
+    text: stringifyYaml([
+      {
+        id: 'demo',
+        config: { mode: 'slow', token: profile === 'desktop' ? 'desktop' : 'laptop' },
+      },
+    ]),
+    error: null,
+  })
+
+  const prepared = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf(),
+    knownProfiles: KNOWN,
+    states,
+    dumpTarget,
+    baseline: { demo: { desktop: { mode: 'slow', token: 'secret' }, laptop: { mode: 'slow', token: 'secret' } } },
+  })
+
+  assert.deepEqual(prepared.plan.rows.find((row) => row.id === 'demo').changes, [
+    { profile: 'desktop', path: ['mode'], from: 'slow', to: 'fast' },
+    { profile: 'laptop', path: ['mode'], from: 'slow', to: 'fast' },
+  ])
+  assert.deepEqual(prepared.merged.items, [
+    { id: 'demo', scope: ['desktop'], config: { mode: 'fast', token: 'desktop' }, origin: 'sync' },
+    { id: 'demo', scope: ['laptop'], config: { mode: 'fast', token: 'laptop' }, origin: 'sync' },
+  ])
+})
+
+test('a mixed first-sync row preserves the target that does have a baseline', async (t) => {
+  const home = makeHome(t)
+  const { ctx } = makeContext(home, {
+    configuration: () => [rowOf('demo', { mode: 'fast', token: 'secret' })],
+  })
+  const states = gatedStates(home, {
+    web: {},
+    desktop: { patchText: blockOf([{ id: 'demo', config: { mode: 'slow', token: 'desktop' } }]) },
+    laptop: { patchText: blockOf([{ id: 'demo', config: { mode: 'slow' } }]) },
+  })
+  const dumpTarget = async ({ profile }) => ({
+    ok: true,
+    text: stringifyYaml([
+      { id: 'demo', config: profile === 'desktop' ? { mode: 'slow', token: 'desktop' } : { mode: 'slow' } },
+    ]),
+    error: null,
+  })
+
+  const prepared = await prepareSync({
+    ctx,
+    env: { home, currentProfile: 'web' },
+    manifest: manifestOf(),
+    knownProfiles: KNOWN,
+    states,
+    dumpTarget,
+    baseline: { demo: { desktop: { mode: 'slow', token: 'secret' } } },
+  })
+
+  const row = prepared.plan.rows.find((entry) => entry.id === 'demo')
+  assert.equal(row.firstSync, true, 'the laptop target has no ancestor')
+  assert.deepEqual(prepared.merged.items, [
+    { id: 'demo', scope: ['desktop'], config: { mode: 'fast', token: 'desktop' }, origin: 'sync' },
+    { id: 'demo', scope: ['laptop'], config: { mode: 'fast', token: 'secret' }, origin: 'sync' },
+  ])
+})

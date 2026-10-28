@@ -367,3 +367,290 @@ test('planSync and buildSyncedManifest tolerate missing options', () => {
     skipped: [],
   })
 })
+
+// ---------------------------------------------------------------------------
+// P2: three-way comparison (baseline supplied)
+// ---------------------------------------------------------------------------
+
+/** profile -> (rowId -> config) fixture, already used by the P1 tests above. */
+function targetRowsOf(rowId, config) {
+  return rowsByProfile({ desktop: { [rowId]: config } })
+}
+
+/** One source row carrying `config`. */
+function sourceRowOf(rowId, config) {
+  return new Map([[rowId, { id: rowId, config }]])
+}
+
+test('planSync first syncs an equal row as in-sync and a differing row wholesale', () => {
+  const equal = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['web', 'desktop'] }),
+    sourceRows: sourceRowOf('row-a', { a: 1 }),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', { a: 1 }),
+    baseline: {},
+    now: () => NOW,
+  })
+  assert.deepEqual(equal.rows, [
+    { id: 'row-a', targets: ['desktop'], action: 'skip', reason: 'in-sync', changes: [] },
+  ])
+
+  const differing = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['web', 'desktop', 'laptop'] }),
+    sourceRows: sourceRowOf('row-a', { a: 1, b: 2 }),
+    knownProfiles: ['web', 'desktop', 'laptop'],
+    targetRows: rowsByProfile({ desktop: { 'row-a': { a: 9 } } }),
+    baseline: {},
+    now: () => NOW,
+  })
+  assert.deepEqual(differing.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop', 'laptop'],
+      action: 'push',
+      changes: [
+        { profile: 'desktop', path: [], from: { a: 9 }, to: { a: 1, b: 2 } },
+        { profile: 'laptop', path: [], from: undefined, to: { a: 1, b: 2 } },
+      ],
+      firstSync: true,
+    },
+  ])
+})
+
+test('planSync pushes only the fields the source changed, including nested edits and removals', () => {
+  const source = {
+    provider: 'openmodel',
+    model: 'new',
+    options: { retries: 3 },
+    list: [1, 2, 3],
+  }
+  const base = {
+    provider: 'openmodel',
+    model: 'old',
+    options: { retries: 2 },
+    list: [1, 2, 3],
+    extra: 'gone',
+  }
+  const target = {
+    provider: 'openmodel',
+    model: 'old',
+    options: { retries: 2 },
+    list: [1, 2, 3],
+    extra: 'gone',
+    targetLocal: 'keep',
+  }
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['desktop'] }),
+    sourceRows: sourceRowOf('row-a', source),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', target),
+    baseline: { 'row-a': { desktop: base } },
+    now: () => NOW,
+  })
+
+  assert.deepEqual(plan.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop'],
+      action: 'push',
+      changes: [
+        { profile: 'desktop', path: ['model'], from: 'old', to: 'new' },
+        { profile: 'desktop', path: ['options', 'retries'], from: 2, to: 3 },
+        { profile: 'desktop', path: ['extra'], from: 'gone', to: undefined },
+      ],
+    },
+  ])
+  assert.equal('firstSync' in plan.rows[0], false, 'a baseline entry exists for this pair')
+})
+
+test('planSync keeps a target-only edit and reports no source change', () => {
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['desktop'] }),
+    sourceRows: sourceRowOf('row-a', { mode: 'slow', token: 'secret' }),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', { mode: 'slow', token: 'local' }),
+    baseline: { 'row-a': { desktop: { mode: 'slow', token: 'secret' } } },
+    now: () => NOW,
+  })
+  assert.deepEqual(plan.rows, [
+    { id: 'row-a', targets: ['desktop'], action: 'skip', reason: 'no-source-change', changes: [] },
+  ])
+})
+
+test('planSync reports a conflict when both sides edited the same field', () => {
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['desktop'] }),
+    sourceRows: sourceRowOf('row-a', { mode: 'fast', token: 'secret' }),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', { mode: 'local', token: 'secret' }),
+    baseline: { 'row-a': { desktop: { mode: 'slow', token: 'secret' } } },
+    now: () => NOW,
+  })
+  assert.deepEqual(plan.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop'],
+      action: 'conflict',
+      changes: [],
+      conflicts: [
+        { profile: 'desktop', path: ['mode'], base: 'slow', source: 'fast', target: 'local' },
+      ],
+    },
+  ])
+})
+
+test('planSync treats a converged edit as no change', () => {
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['desktop'] }),
+    sourceRows: sourceRowOf('row-a', { mode: 'fast' }),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', { mode: 'fast' }),
+    baseline: { 'row-a': { desktop: { mode: 'slow' } } },
+    now: () => NOW,
+  })
+  assert.deepEqual(plan.rows, [
+    { id: 'row-a', targets: ['desktop'], action: 'skip', reason: 'no-source-change', changes: [] },
+  ])
+})
+
+test('planSync lets one target conflict while another target still has a safe write', () => {
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['web', 'desktop', 'laptop'] }),
+    sourceRows: sourceRowOf('row-a', { mode: 'fast' }),
+    knownProfiles: ['web', 'desktop', 'laptop'],
+    targetRows: rowsByProfile({ desktop: { 'row-a': { mode: 'slow' } }, laptop: { 'row-a': { mode: 'local' } } }),
+    baseline: { 'row-a': { desktop: { mode: 'slow' }, laptop: { mode: 'slow' } } },
+    now: () => NOW,
+  })
+
+  assert.deepEqual(plan.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop', 'laptop'],
+      action: 'conflict',
+      changes: [{ profile: 'desktop', path: ['mode'], from: 'slow', to: 'fast' }],
+      conflicts: [{ profile: 'laptop', path: ['mode'], base: 'slow', source: 'fast', target: 'local' }],
+    },
+  ])
+})
+
+test('planSync reports a deletion against a target edit as a conflict', () => {
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['desktop'] }),
+    sourceRows: sourceRowOf('row-a', { mode: 'slow' }),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', { mode: 'slow', token: 'local' }),
+    baseline: { 'row-a': { desktop: { mode: 'slow', token: 'secret' } } },
+    now: () => NOW,
+  })
+
+  assert.deepEqual(plan.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop'],
+      action: 'conflict',
+      changes: [],
+      conflicts: [{ profile: 'desktop', path: ['token'], base: 'secret', source: undefined, target: 'local' }],
+    },
+  ])
+})
+
+test('planSync compares arrays as whole values in three-way mode', () => {
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['desktop'] }),
+    sourceRows: sourceRowOf('row-a', { list: [1, 3], other: [1, 2] }),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', { list: [1, 2], other: [1, 9] }),
+    baseline: { 'row-a': { desktop: { list: [1, 2], other: [1, 2] } } },
+    now: () => NOW,
+  })
+
+  assert.deepEqual(plan.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop'],
+      action: 'push',
+      changes: [{ profile: 'desktop', path: ['list'], from: [1, 2], to: [1, 3] }],
+    },
+  ])
+})
+
+test('planSync keeps a first-sync target visible next to an unchanged baseline target', () => {
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['web', 'desktop', 'laptop'] }),
+    sourceRows: sourceRowOf('row-a', { a: 1 }),
+    knownProfiles: ['web', 'desktop', 'laptop'],
+    targetRows: rowsByProfile({ desktop: { 'row-a': { a: 1 } }, laptop: { 'row-a': { a: 5 } } }),
+    baseline: { 'row-a': { desktop: { a: 1 } } },
+    now: () => NOW,
+  })
+
+  assert.deepEqual(plan.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop', 'laptop'],
+      action: 'push',
+      changes: [{ profile: 'laptop', path: [], from: { a: 5 }, to: { a: 1 } }],
+      firstSync: true,
+    },
+  ])
+})
+
+test('planSync without a baseline keeps the P1 two-way contract', () => {
+  const common = {
+    sourceProfile: 'web',
+    sync: policy({ targets: ['desktop'] }),
+    sourceRows: sourceRowOf('row-a', { mode: 'slow' }),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', { mode: 'local' }),
+    now: () => NOW,
+  }
+
+  const legacy = planSync(common)
+  assert.deepEqual(legacy.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop'],
+      action: 'push',
+      changes: [{ profile: 'desktop', path: ['mode'], from: 'local', to: 'slow' }],
+    },
+  ])
+
+  const threeWay = planSync({
+    ...common,
+    baseline: { 'row-a': { desktop: { mode: 'slow' } } },
+  })
+  assert.deepEqual(threeWay.rows, [
+    { id: 'row-a', targets: ['desktop'], action: 'skip', reason: 'no-source-change', changes: [] },
+  ])
+})
+
+test('planSync accepts a whole baseline document as well as its rows map', () => {
+  const plan = planSync({
+    sourceProfile: 'web',
+    sync: policy({ targets: ['desktop'] }),
+    sourceRows: sourceRowOf('row-a', { a: 2 }),
+    knownProfiles: ['web', 'desktop'],
+    targetRows: targetRowsOf('row-a', { a: 1 }),
+    baseline: { version: 1, updatedAt: NOW, rows: { 'row-a': { desktop: { a: 1 } } } },
+    now: () => NOW,
+  })
+  assert.deepEqual(plan.rows, [
+    {
+      id: 'row-a',
+      targets: ['desktop'],
+      action: 'push',
+      changes: [{ profile: 'desktop', path: ['a'], from: 1, to: 2 }],
+    },
+  ])
+})
