@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { apply } from '../index.js'
-import { baselinePath, readBaseline } from '../lib/sync-baseline.js'
+import { baselinePath, readBaseline, recordBaseline } from '../lib/sync-baseline.js'
 import { BLOCK_FOOTER, BLOCK_HEADER_PREFIX, fileExists, stringifyYaml } from '../lib/util.js'
 import { makeHome, makeProfile, writeTextFile } from './helpers.js'
 
@@ -176,4 +176,42 @@ test('a corrupt baseline aborts apply instead of planning every row as new', asy
     /mode: slow/,
     'the target profile was not rewritten',
   )
+})
+
+
+test('apply writes only the changed fields and keeps each target local value', async (t) => {
+  const home = makeHome(t)
+  makeProfile(home, 'web', { patchText: blockOf([{ id: 'demo', config: { mode: 'fast', token: 'secret' } }]) })
+  makeProfile(home, 'desktop', { patchText: blockOf([{ id: 'demo', config: { mode: 'slow', token: 'desktop' } }]) })
+  makeProfile(home, 'laptop', { patchText: blockOf([{ id: 'demo', config: { mode: 'slow', token: 'laptop' } }]) })
+  writeManifest(home, {
+    ...MANIFEST,
+    profiles: ['web', 'desktop', 'laptop'],
+  })
+  const sourceConfig = { mode: 'fast', token: 'secret' }
+  const baseConfig = { mode: 'slow', token: 'secret' }
+  recordBaseline({
+    home,
+    entries: [
+      { id: 'demo', profile: 'desktop', config: baseConfig },
+      { id: 'demo', profile: 'laptop', config: baseConfig },
+    ],
+  })
+
+  const tool = makeToolContext(home, {
+    configuration: () => [rowOf('demo', sourceConfig)],
+  })
+  const applied = await tool.execute({ action: 'apply', profiles: ['desktop', 'laptop'] })
+  assert.equal(applied.ok, true, JSON.stringify(applied.errors))
+
+  const desktopPatch = readFileSync(join(home, 'profiles', 'desktop', 'cordis.patch.yml'), 'utf8')
+  const laptopPatch = readFileSync(join(home, 'profiles', 'laptop', 'cordis.patch.yml'), 'utf8')
+  assert.match(desktopPatch, /mode: fast/)
+  assert.match(desktopPatch, /token: desktop/, 'the target-local token survives the push')
+  assert.match(laptopPatch, /mode: fast/)
+  assert.match(laptopPatch, /token: laptop/)
+
+  assert.deepEqual(readBaseline({ home }).baseline.rows, {
+    demo: { desktop: sourceConfig, laptop: sourceConfig },
+  })
 })

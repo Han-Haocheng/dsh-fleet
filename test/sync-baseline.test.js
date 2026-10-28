@@ -134,7 +134,9 @@ test('clearBaseline drops the named rows, or every row without ids', (t) => {
   assert.deepEqual(readBaseline({ home }).baseline.rows, {})
 })
 
-test('a write failure is returned, never thrown, and leaves the old baseline intact', { skip: process.getuid?.() === 0 }, (t) => {
+const canDenyWrites = typeof process.getuid === 'function' && process.getuid() !== 0
+
+test('a write failure is returned, never thrown, and leaves the old baseline intact', { skip: !canDenyWrites }, (t) => {
   const home = makeTempDir(t)
   recordBaseline({ home, entries: [{ id: 'row-a', profile: 'desktop', config: { a: 1 } }] })
   const path = baselinePath(home)
